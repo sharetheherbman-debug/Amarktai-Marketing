@@ -50,14 +50,22 @@ def upgrade():
     op.create_index('ix_leads_user_id', 'leads', ['user_id'])
     op.create_index('ix_leads_email', 'leads', ['email'])
 
-    # Extend platform_connections to allow new platform types
-    # The Enum in PostgreSQL requires a migration to add new values
-    op.execute("ALTER TYPE platformtype ADD VALUE IF NOT EXISTS 'pinterest'")
-    op.execute("ALTER TYPE platformtype ADD VALUE IF NOT EXISTS 'reddit'")
-    op.execute("ALTER TYPE platformtype ADD VALUE IF NOT EXISTS 'bluesky'")
-    op.execute("ALTER TYPE platformtype ADD VALUE IF NOT EXISTS 'threads'")
-    op.execute("ALTER TYPE platformtype ADD VALUE IF NOT EXISTS 'telegram'")
-    op.execute("ALTER TYPE platformtype ADD VALUE IF NOT EXISTS 'snapchat'")
+    # Extend platform enum when present (older schemas may use plain VARCHAR)
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'platformtype') THEN
+                ALTER TYPE platformtype ADD VALUE IF NOT EXISTS 'pinterest';
+                ALTER TYPE platformtype ADD VALUE IF NOT EXISTS 'reddit';
+                ALTER TYPE platformtype ADD VALUE IF NOT EXISTS 'bluesky';
+                ALTER TYPE platformtype ADD VALUE IF NOT EXISTS 'threads';
+                ALTER TYPE platformtype ADD VALUE IF NOT EXISTS 'telegram';
+                ALTER TYPE platformtype ADD VALUE IF NOT EXISTS 'snapchat';
+            END IF;
+        END$$;
+        """
+    )
 
 
 def downgrade():

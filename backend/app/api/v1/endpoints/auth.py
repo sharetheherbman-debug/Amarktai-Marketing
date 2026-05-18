@@ -10,8 +10,6 @@ POST /api/v1/auth/reset-password  — reset password with token
 GET  /api/v1/auth/verify-email    — verify email address via token
 """
 
-from __future__ import annotations
-
 import logging
 import secrets
 import uuid

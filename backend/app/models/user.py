@@ -46,7 +46,6 @@ class User(Base):
 
     # Email verification & billing
     email_verified = Column(Boolean, default=False)
-    stripe_customer_id = Column(String(255), nullable=True)
 
     # Referral program
     referral_code = Column(String(16), unique=True, nullable=True, index=True)
