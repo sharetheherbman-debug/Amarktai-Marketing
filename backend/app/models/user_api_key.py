@@ -50,18 +50,18 @@ class UserAPIKey(Base):
 
     @staticmethod
     def encrypt_key(key_value: str) -> str:
-        if _fernet:
-            return _fernet.encrypt(key_value.encode()).decode()
-        return key_value
+        if not _fernet:
+            raise RuntimeError("API key encryption is not configured (invalid ENCRYPTION_KEY).")
+        return _fernet.encrypt(key_value.encode()).decode()
 
     @staticmethod
     def decrypt_key(encrypted_value: str) -> str:
-        if _fernet:
-            try:
-                return _fernet.decrypt(encrypted_value.encode()).decode()
-            except Exception:
-                return encrypted_value
-        return encrypted_value
+        if not _fernet:
+            raise RuntimeError("API key decryption is not configured (invalid ENCRYPTION_KEY).")
+        try:
+            return _fernet.decrypt(encrypted_value.encode()).decode()
+        except Exception as exc:
+            raise RuntimeError("Stored API key cannot be decrypted with current ENCRYPTION_KEY.") from exc
 
     def get_decrypted_key(self) -> str:
         return self.decrypt_key(self.encrypted_key)
@@ -102,23 +102,29 @@ class UserIntegration(Base):
     user = relationship("User", back_populates="integrations")
 
     def get_access_token(self) -> str | None:
-        if self.encrypted_access_token and _fernet:
+        if self.encrypted_access_token:
+            if not _fernet:
+                raise RuntimeError("Integration token decryption is not configured (invalid ENCRYPTION_KEY).")
             try:
                 return _fernet.decrypt(self.encrypted_access_token.encode()).decode()
-            except Exception:
-                return self.encrypted_access_token
+            except Exception as exc:
+                raise RuntimeError("Stored integration access token cannot be decrypted.") from exc
         return self.encrypted_access_token
 
     def get_refresh_token(self) -> str | None:
-        if self.encrypted_refresh_token and _fernet:
+        if self.encrypted_refresh_token:
+            if not _fernet:
+                raise RuntimeError("Integration token decryption is not configured (invalid ENCRYPTION_KEY).")
             try:
                 return _fernet.decrypt(self.encrypted_refresh_token.encode()).decode()
-            except Exception:
-                return self.encrypted_refresh_token
+            except Exception as exc:
+                raise RuntimeError("Stored integration refresh token cannot be decrypted.") from exc
         return self.encrypted_refresh_token
 
     @staticmethod
     def encrypt_token(token: str) -> str:
-        if _fernet and token:
+        if token:
+            if not _fernet:
+                raise RuntimeError("Integration token encryption is not configured (invalid ENCRYPTION_KEY).")
             return _fernet.encrypt(token.encode()).decode()
         return token

@@ -4,7 +4,6 @@ from app.api.v1.endpoints import (
     auth, users, webapps, platforms, content, analytics, analytics_export,
     integrations, engagement, ab_testing, cost_tracking, autonomous, admin,
     remix, tools, leads, groups, blog, oauth, billing, events,
-    remix, tools, leads, groups, blog, billing,
     amarktai_status, dashboard, settings, contact,
     stats, changelog, notifications,
 )
@@ -58,9 +57,6 @@ api_router.include_router(contact.router, prefix="/contact", tags=["contact"])
 
 # OAuth2 flows for social platform connections
 api_router.include_router(oauth.router, prefix="/oauth", tags=["oauth"])
-
-# Billing / Stripe subscriptions
-api_router.include_router(billing.router, prefix="/billing", tags=["billing"])
 
 # Real-time SSE events
 api_router.include_router(events.router, prefix="/events", tags=["events"])

@@ -3,11 +3,12 @@ AmarktAI Marketing — Unified AI Provider Abstraction
 =====================================================
 
 Priority order for text generation (lowest cost first):
-  1. Qwen (Alibaba Cloud DashScope) — primary (QWEN_API_KEY)
-  2. HuggingFace Inference API — fallback (HUGGINGFACE_TOKEN)
-  3. OpenAI — optional (OPENAI_API_KEY)
-  4. Gemini — optional (GEMINI_API_KEY)
-  5. Template fallback — always available
+  1. GenX — primary unified router (GENX_API_KEY)
+  2. Qwen (Alibaba Cloud DashScope) — fallback (QWEN_API_KEY)
+  3. HuggingFace Inference API — fallback (HUGGINGFACE_TOKEN)
+  4. OpenAI — optional (OPENAI_API_KEY)
+  5. Gemini — optional (GEMINI_API_KEY)
+  6. Template fallback — always available
 
 All external provider names are intentionally abstracted here.
 Callers receive metadata indicating which provider was used.
@@ -26,6 +27,7 @@ import logging
 from typing import Any
 
 from app.core.config import settings
+from app.services.genx_client import GenXClient
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +42,7 @@ _GEMINI_MODEL = "gemini-pro"
 class AIProvider:
     """
     Unified AI provider that walks down a priority chain:
-    AmarktAI Network → Qwen → HuggingFace → OpenAI → Gemini → Template.
+    AmarktAI Network → GenX → Qwen → HuggingFace → OpenAI → Gemini → Template.
 
     When AMARKTAI_INTEGRATION_ENABLED=true and a valid integration token is
     configured, the AmarktAI Network super brain is used as the top-priority
@@ -54,11 +56,14 @@ class AIProvider:
         hf_token: str = "",
         openai_key: str = "",
         gemini_key: str = "",
+        genx_key: str = "",
     ) -> None:
         self._qwen_key = qwen_key or ""
         self._hf_token = hf_token or ""
         self._openai_key = openai_key or ""
         self._gemini_key = gemini_key or ""
+        self._genx_key = genx_key or ""
+        self._genx = GenXClient(api_key=self._genx_key)
 
     # ------------------------------------------------------------------
     # Factory helpers
@@ -69,6 +74,7 @@ class AIProvider:
         """Build from global settings (system-level keys only)."""
         gemini_key = settings.GEMINI_API_KEY or settings.GOOGLE_GEMINI_API_KEY or ""
         return cls(
+            genx_key=settings.GENX_API_KEY,
             qwen_key=settings.QWEN_API_KEY,
             hf_token=settings.HUGGINGFACE_TOKEN,
             openai_key=settings.OPENAI_API_KEY,
@@ -82,10 +88,12 @@ class AIProvider:
         hf_token: str = "",
         openai_key: str = "",
         gemini_key: str = "",
+        genx_key: str = "",
     ) -> "AIProvider":
         """Build with explicit key overrides (e.g. from per-user DB keys)."""
         gemini_fallback = settings.GEMINI_API_KEY or settings.GOOGLE_GEMINI_API_KEY or ""
         return cls(
+            genx_key=genx_key or settings.GENX_API_KEY,
             qwen_key=qwen_key or settings.QWEN_API_KEY,
             hf_token=hf_token or settings.HUGGINGFACE_TOKEN,
             openai_key=openai_key or settings.OPENAI_API_KEY,
@@ -99,12 +107,33 @@ class AIProvider:
         hf_token: str = "",
         qwen_key: str = "",
         openai_key: str = "",
+        genx_key: str = "",
     ) -> "AIProvider":
         return cls.from_keys(
+            genx_key=genx_key,
             qwen_key=qwen_key,
             hf_token=hf_token,
             openai_key=openai_key,
         )
+
+    async def _call_genx(self, prompt: str, max_tokens: int = 512) -> dict[str, Any] | None:
+        if not self._genx_key:
+            return None
+        result = await self._genx.generate_text(
+            prompt,
+            system="You are an expert social media assistant for AmarktAI Marketing.",
+            task="copy",
+            max_tokens=max_tokens,
+        )
+        if not result:
+            return None
+        return {
+            "text": result["text"],
+            "model": result["model"],
+            "tokens": result.get("tokens", 0),
+            "provider": "genx",
+            "cost_usd": result.get("cost_usd", 0.0),
+        }
 
     # ------------------------------------------------------------------
     # Low-level provider calls
@@ -317,6 +346,7 @@ class AIProvider:
         """
         for call in (
             self._call_amarktai_network,
+            self._call_genx,
             self._call_qwen,
             self._call_huggingface,
             self._call_openai,
@@ -370,8 +400,8 @@ class AIProvider:
                 "_provider_tag": "ai" | "template",
             }
         """
-        # Try delegating to the specialist HF generator first (it knows platform hints)
-        if self._qwen_key or self._hf_token:
+        # Try delegating to the specialist HF generator first when GenX is not configured.
+        if (self._qwen_key or self._hf_token) and not self._genx_key:
             try:
                 from app.services.hf_generator import HuggingFaceGenerator
                 gen = HuggingFaceGenerator(

@@ -35,6 +35,19 @@ class Settings(BaseSettings):
     ENCRYPTION_KEY: str = "your-encryption-key-here-change-in-production"
     
     # ==================== LLM API KEYS ====================
+    # GenX (primary unified AI provider)
+    GENX_API_KEY: str = ""
+    GENX_BASE_URL: str = "https://api.genxai.co/v1"
+    GENX_DEFAULT_MODEL: str = "genx-chat-pro"
+    GENX_TIMEOUT: int = 60
+    GENX_MODEL_ALLOWLIST: str = ""  # comma-separated model IDs
+    GENX_MODEL_FALLBACKS: str = ""  # comma-separated ordered fallback model IDs
+    GENX_MODEL_COPY: str = ""
+    GENX_MODEL_STRATEGY: str = ""
+    GENX_MODEL_ANALYSIS: str = ""
+    GENX_MODEL_LONG_FORM: str = ""
+    GENX_MODEL_MODERATION: str = ""
+
     # Primary LLM providers
     OPENAI_API_KEY: str = ""
     ANTHROPIC_API_KEY: str = ""
@@ -249,28 +262,6 @@ if settings.ENCRYPTION_KEY == _DEFAULT_ENCRYPTION_KEY:
             "ENCRYPTION_KEY is set to the default insecure value. "
             "Set ENCRYPTION_KEY in your .env file using: openssl rand -base64 32"
         )
-if settings.JWT_SECRET == _DEFAULT_JWT_SECRET:
-    if _is_production:
-        raise RuntimeError(
-            "FATAL: JWT_SECRET is set to the default insecure value in production. "
-            "Set JWT_SECRET in your .env file using: openssl rand -hex 32"
-        )
-    _cfg_logger.warning(
-        "JWT_SECRET is set to the default insecure value. "
-        "Set JWT_SECRET in your .env file using: openssl rand -hex 32"
-    )
-
-if settings.ENCRYPTION_KEY == _DEFAULT_ENCRYPTION_KEY:
-    if _is_production:
-        raise RuntimeError(
-            "FATAL: ENCRYPTION_KEY is set to the default insecure value in production. "
-            "Set ENCRYPTION_KEY in your .env file using: openssl rand -hex 32"
-        )
-    _cfg_logger.warning(
-        "ENCRYPTION_KEY is set to the default insecure value. "
-        "Set ENCRYPTION_KEY in your .env file using: openssl rand -hex 32"
-    )
-
 # Guard against default DB password in production
 _db_url = settings.DATABASE_URL or ""
 if _is_production and ("changeme" in _db_url.lower() or "CHANGE_THIS_PASSWORD" in _db_url):

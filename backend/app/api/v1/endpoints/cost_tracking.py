@@ -189,6 +189,7 @@ async def estimate_generation_cost(
     # Provider costs per unit
     provider_costs = {
         "image": {
+            "genx": 0.01,
             "huggingface": 0.0,  # Free
             "replicate": 0.01,
             "fal": 0.02,
@@ -213,6 +214,7 @@ async def estimate_generation_cost(
         
         # Map key names to providers
         key_to_provider = {
+            "GENX_API_KEY": "genx",
             "HUGGINGFACE_TOKEN": "huggingface",
             "REPLICATE_API_TOKEN": "replicate",
             "FAL_AI_KEY": "fal",

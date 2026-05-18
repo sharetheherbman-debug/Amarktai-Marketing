@@ -15,8 +15,8 @@ AmarktAI Marketing is a full-stack SaaS platform that automates content creation
 | Database     | PostgreSQL 15 — `psycopg2-binary` driver — hosted on Webdock VPS        |
 | Cache/Queue  | Redis 7                                                                 |
 | Auth         | JWT HS256 — email/password only                                         |
-| AI Primary   | Qwen (DashScope)                                                        |
-| AI Fallback  | HuggingFace                                                             |
+| AI Primary   | GenX (unified provider, 59-model routing)                               |
+| AI Fallback  | Qwen (DashScope), HuggingFace                                           |
 | AI Optional  | OpenAI, Gemini (Google)                                                 |
 | Scraping     | Firecrawl                                                               |
 
@@ -27,10 +27,10 @@ AmarktAI Marketing is a full-stack SaaS platform that automates content creation
 Requests flow through providers in priority order:
 
 ```
-Firecrawl (web scraping) → Qwen (primary LLM) → HuggingFace (fallback) → OpenAI (optional) → Gemini (optional)
+Firecrawl (web scraping) → GenX (primary LLM router) → Qwen (fallback) → HuggingFace (fallback) → OpenAI (optional) → Gemini (optional)
 ```
 
-Only **Qwen** and **HuggingFace** keys are required. Firecrawl is strongly recommended for competitor intelligence. OpenAI and Gemini are opt-in enhancements.
+Only **GenX** is required for AI generation. Firecrawl is strongly recommended for competitor intelligence. Legacy provider keys remain optional compatibility fallbacks.
 
 ---
 
@@ -95,8 +95,11 @@ npm run dev                 # http://localhost:5173
 | `JWT_SECRET`        | ✅       | Random secret for JWT signing (`openssl rand -hex 32`)       |
 | `ENCRYPTION_KEY`    | ✅       | Base64 key for credential encryption (`openssl rand -base64 32`) |
 | `REDIS_URL`         | ✅       | `redis://localhost:6379/0`                                   |
-| `QWEN_API_KEY`      | ✅       | DashScope API key (primary AI provider)                      |
-| `HUGGINGFACE_TOKEN` | ✅       | HuggingFace access token (AI fallback)                       |
+| `GENX_API_KEY`      | ✅       | GenX unified AI API key (primary provider)                    |
+| `GENX_BASE_URL`     | ✅       | GenX API base URL                                              |
+| `GENX_DEFAULT_MODEL`| ✅       | Default GenX model for generation                              |
+| `QWEN_API_KEY`      | ⬜       | DashScope API key (legacy fallback provider)                  |
+| `HUGGINGFACE_TOKEN` | ⬜       | HuggingFace access token (legacy fallback provider)           |
 | `FIRECRAWL_API_KEY` | ⭐       | Recommended for competitor scraping and web data             |
 | `OPENAI_API_KEY`    | ⬜       | Optional AI enhancement                                      |
 | `GEMINI_API_KEY`    | ⬜       | Optional AI enhancement                                      |

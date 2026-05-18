@@ -23,6 +23,7 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
+import { getStoredToken } from '@/lib/auth';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -55,6 +56,7 @@ const KEY_GROUPS: { label: string; keys: string[] }[] = [
   {
     label: 'AI Engine / LLM',
     keys: [
+      'GENX_API_KEY',
       'QWEN_API_KEY',
       'HUGGINGFACE_TOKEN',
       'OPENAI_API_KEY',
@@ -115,9 +117,12 @@ export default function AdminPage() {
   const loadData = async () => {
     setIsLoading(true);
     try {
+      const token = getStoredToken();
+      const authHeaders: Record<string, string> = {};
+      if (token) authHeaders.Authorization = `Bearer ${token}`;
       const [healthRes, keysRes] = await Promise.all([
-        fetch('/api/v1/admin/health'),
-        fetch('/api/v1/admin/system-keys'),
+        fetch('/api/v1/admin/health', { headers: authHeaders }),
+        fetch('/api/v1/admin/system-keys', { headers: authHeaders }),
       ]);
       if (healthRes.ok) setHealth(await healthRes.json());
       if (keysRes.ok) {
@@ -136,9 +141,13 @@ export default function AdminPage() {
     if (!value?.trim()) { toast.error('Key value cannot be empty'); return; }
     setIsSaving(prev => ({ ...prev, [keyName]: true }));
     try {
+      const token = getStoredToken();
       const res = await fetch('/api/v1/admin/system-keys', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify({ key_name: keyName, key_value: value.trim() }),
       });
       if (!res.ok) throw new Error((await res.json()).detail || 'Failed');
@@ -154,10 +163,14 @@ export default function AdminPage() {
 
   const toggleFlag = async (flag: string, value: boolean) => {
     try {
+      const token = getStoredToken();
       const body: Record<string, unknown> = { [flag]: value };
       const res = await fetch('/api/v1/admin/feature-flags', {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify(body),
       });
       if (!res.ok) throw new Error('Failed to update flag');
@@ -171,9 +184,13 @@ export default function AdminPage() {
   const triggerGeneration = async () => {
     setIsGenerating(true);
     try {
+      const token = getStoredToken();
       const res = await fetch('/api/v1/admin/trigger-generation', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify({ window: 'manual' }),
       });
       if (!res.ok) throw new Error('Failed');

@@ -79,6 +79,7 @@ async def create_api_key(
     """Add a new API key for the current user."""
     # Validate key name
     valid_keys = [
+        "GENX_API_KEY",
         "FIRECRAWL_API_KEY",
         "QWEN_API_KEY",
         "HUGGINGFACE_TOKEN",
@@ -510,4 +511,3 @@ async def oauth_callback(
     db.commit()
 
     return {"message": "Connected successfully", "platform": platform, "has_token": bool(access_token)}
-

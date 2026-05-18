@@ -26,6 +26,7 @@ class ApiKeysBatchRequest(BaseModel):
 
 # Allowed key names users can set from the settings page
 _ALLOWED_KEYS = {
+    "GENX_API_KEY",
     "QWEN_API_KEY",
     "HUGGINGFACE_TOKEN",
     "OPENAI_API_KEY",
@@ -166,4 +167,3 @@ async def update_location(
             "run alembic migration to enable persistent location storage.",
             current_user.id,
         )
-
