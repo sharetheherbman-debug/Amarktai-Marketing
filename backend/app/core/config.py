@@ -269,3 +269,22 @@ if _is_production and ("changeme" in _db_url.lower() or "CHANGE_THIS_PASSWORD" i
         "FATAL: DATABASE_URL contains a default password. "
         "Set POSTGRES_PASSWORD in your .env file before deploying."
     )
+
+# Warn when ADMIN_EMAIL is still the default shipping value in production.
+# This is only a warning (not a hard stop) because the owner may intentionally
+# keep the official address; third-party deployments should override it.
+_DEFAULT_ADMIN_EMAIL = "amarktainetwork@gmail.com"
+if _is_production and settings.ADMIN_EMAIL == _DEFAULT_ADMIN_EMAIL:
+    _security_logger.warning(
+        "ADMIN_EMAIL is still set to the default value '%s'. "
+        "Override ADMIN_EMAIL in your .env file if this is not the intended admin account.",
+        _DEFAULT_ADMIN_EMAIL,
+    )
+
+# Warn when GenX (primary AI provider) is not configured in production.
+if _is_production and not settings.GENX_API_KEY:
+    _security_logger.warning(
+        "GENX_API_KEY is not set. GenX is the primary AI provider — "
+        "content generation will fall back to secondary providers or templates. "
+        "Set GENX_API_KEY in your .env file for full functionality."
+    )
