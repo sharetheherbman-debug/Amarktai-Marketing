@@ -5,7 +5,7 @@ import {
   Home, PenTool, CheckSquare, Calendar, BarChart2,
   MessageCircle, Share2, Zap, Users, Layers, FileText,
   Plug, Settings, Shield, Menu, X, Bell, ChevronDown,
-  LogOut, User, Building2, FileText,
+  LogOut, User, Building2,
 } from 'lucide-react';
 import { useAuth } from '@/lib/auth';
 import { useWebapp } from '@/hooks/useWebapp';

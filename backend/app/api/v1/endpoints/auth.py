@@ -160,43 +160,46 @@ def register(request: Request, body: RegisterRequest, db: Session = Depends(get_
             detail="Failed to create account.",
         )
 
-    token = create_access_token(user.id)
-
     # Send welcome email (non-blocking, failure does not block registration)
     try:
         from app.services.email_service import send_welcome
         send_welcome(user.email, user.name)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Welcome email failed for %s: %s", user.email, exc)
+
+    # Send verification email (non-blocking)
+    try:
+        verify_token = create_access_token(user.id, expires_delta=timedelta(hours=24))
+        verify_url = f"{_settings.FRONTEND_URL}/verify-email?token={verify_token}"
+        _send_email(
+            to=user.email,
+            subject="Verify your AmarktAI Marketing account",
+            html=(
+                f"<h2>Welcome to AmarktAI Marketing!</h2>"
+                f"<p>Click the link below to verify your email address:</p>"
+                f'<p><a href="{verify_url}">Verify Email</a></p>'
+                f"<p>This link expires in 24 hours.</p>"
+            ),
+        )
+    except Exception as exc:
+        logger.warning("Verification email failed for %s: %s", user.email, exc)
 
     # Notify AmarktAI Network of new signup (non-blocking)
     try:
         import asyncio
         from app.services.integration import send_event
-        asyncio.get_event_loop().create_task(
-            send_event("user.signup", {"user_id": user.id})
-        )
-    except Exception:
-        pass
 
-    return TokenResponse(
-        access_token=token,
-        user_id=user.id,
-        email=user.email,
-        name=user.name,
-    # Send verification email
-    verify_token = create_access_token(user.id, expires_delta=timedelta(hours=24))
-    verify_url = f"{_settings.FRONTEND_URL}/verify-email?token={verify_token}"
-    _send_email(
-        to=user.email,
-        subject="Verify your AmarktAI Marketing account",
-        html=(
-            f"<h2>Welcome to AmarktAI Marketing!</h2>"
-            f"<p>Click the link below to verify your email address:</p>"
-            f'<p><a href="{verify_url}">Verify Email</a></p>'
-            f"<p>This link expires in 24 hours.</p>"
-        ),
-    )
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            loop.create_task(send_event("user.signup", {"user_id": user.id}))
+        else:
+            asyncio.run(send_event("user.signup", {"user_id": user.id}))
+    except Exception as exc:
+        logger.warning("AmarktAI signup event failed for %s: %s", user.email, exc)
 
     return _build_token_response(user)
 
