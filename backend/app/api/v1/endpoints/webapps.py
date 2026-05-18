@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Response, UploadFile, status
 from sqlalchemy.orm import Session
 import uuid
 
@@ -308,7 +308,7 @@ async def delete_media(
     asset_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
-) -> None:
+) -> Response:
     """Remove a previously uploaded media asset from the business/app."""
     import os
     from app.core.config import settings
@@ -338,4 +338,4 @@ async def delete_media(
 
     webapp.media_assets = [a for a in current_assets if a.get("id") != asset_id]
     db.commit()
-    return None
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
