@@ -208,7 +208,10 @@ async def stripe_webhook(
     stripe = _get_stripe()
     payload = await request.body()
 
+    _is_production = settings.APP_ENVIRONMENT == "production"
+
     if settings.STRIPE_WEBHOOK_SECRET and stripe_signature:
+        # Signature verification — always used when both secret and header are present.
         try:
             event = stripe.Webhook.construct_event(
                 payload,
@@ -218,7 +221,28 @@ async def stripe_webhook(
         except Exception as exc:
             logger.warning("Stripe webhook signature verification failed: %s", exc)
             raise HTTPException(status_code=400, detail="Invalid Stripe signature")
+    elif _is_production:
+        # In production, unsigned webhook traffic is never accepted.
+        missing = []
+        if not settings.STRIPE_WEBHOOK_SECRET:
+            missing.append("STRIPE_WEBHOOK_SECRET not configured")
+        if not stripe_signature:
+            missing.append("stripe-signature header missing")
+        logger.error(
+            "Stripe webhook rejected in production — unsigned payload refused. Issues: %s",
+            "; ".join(missing),
+        )
+        raise HTTPException(
+            status_code=400,
+            detail="Stripe webhook signature is required in production.",
+        )
     else:
+        # Non-production only: accept unsigned payloads for local/dev testing.
+        logger.warning(
+            "Stripe webhook received without signature verification "
+            "(APP_ENVIRONMENT=%s). Set STRIPE_WEBHOOK_SECRET for secure webhook handling.",
+            settings.APP_ENVIRONMENT,
+        )
         event = json.loads(payload.decode("utf-8"))
 
     event_type = event.get("type", "")

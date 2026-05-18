@@ -10,6 +10,7 @@ from datetime import datetime
 
 from app.db.session import get_db
 from app.api.deps import get_current_user
+from app.core.config import settings
 from app.models.content import Content, ContentStatus
 from app.models.user import User
 from app.models.webapp import WebApp
@@ -107,6 +108,16 @@ async def post_content(
             "scheduled_for": request.scheduled_time
         }
     else:
+        # Immediate posting is gated behind the ENABLE_AUTO_POST feature flag.
+        if not settings.ENABLE_AUTO_POST:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "Autonomous posting is currently disabled. "
+                    "Set ENABLE_AUTO_POST=true in your environment to allow immediate publishing, "
+                    "or schedule this content for a future time instead."
+                ),
+            )
         # Post immediately
         background_tasks.add_task(post_to_platform_worker, content_id, current_user.id)
         
@@ -207,7 +218,61 @@ async def get_best_posting_times(
         "recommendation": f"Post between {best_times[0]['hour']}:00-{best_times[0]['hour']+2}:00 for highest engagement" if best_times else "Insufficient data"
     }
 
-# Background task workers
+@router.get("/morning-digest")
+async def morning_digest(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Return the daily morning approval digest — all pending content ready for the
+    user's morning review-and-approve workflow.
+
+    The response includes:
+    - ``pending_count``: total items awaiting approval.
+    - ``pending_items``: list of content summaries (id, title, platform, created_at).
+    - ``auto_post_enabled``: whether autonomous publishing is active.
+    - ``scheduled_today``: count of posts already scheduled for today.
+    """
+    from datetime import date
+
+    today_start = datetime.combine(date.today(), datetime.min.time())
+    today_end = datetime.combine(date.today(), datetime.max.time())
+
+    pending = db.query(Content).filter(
+        Content.user_id == current_user.id,
+        Content.status == ContentStatus.PENDING,
+    ).order_by(Content.created_at.desc()).all()
+
+    scheduled_today = db.query(Content).filter(
+        Content.user_id == current_user.id,
+        Content.status == ContentStatus.SCHEDULED,
+        Content.scheduled_for >= today_start,
+        Content.scheduled_for <= today_end,
+    ).count()
+
+    return {
+        "pending_count": len(pending),
+        "pending_items": [
+            {
+                "id": c.id,
+                "title": c.title,
+                "platform": c.platform,
+                "created_at": c.created_at,
+            }
+            for c in pending
+        ],
+        "auto_post_enabled": settings.ENABLE_AUTO_POST,
+        "scheduled_today": scheduled_today,
+        "message": (
+            f"{len(pending)} item(s) ready for your approval. "
+            "Review and approve to schedule or publish."
+            if pending
+            else "No pending content — you're all caught up!"
+        ),
+    }
+
+
+
 async def schedule_posts_worker(user_id: str):
     """Worker to schedule approved posts."""
     from app.db.session import SessionLocal

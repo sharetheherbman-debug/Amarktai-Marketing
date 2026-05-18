@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any
 
 import httpx
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class GenXClient:
@@ -43,6 +46,49 @@ class GenXClient:
     @property
     def ready(self) -> bool:
         return bool(self.api_key and self.base_url and self.default_model)
+
+    async def health_check(self) -> dict[str, Any]:
+        """
+        Probe GenX connectivity.
+
+        Returns a dict with keys:
+          - ``ok`` (bool): True when a test request succeeds.
+          - ``latency_ms`` (int): Round-trip time in milliseconds (0 when not ok).
+          - ``model`` (str): Model used for the probe.
+          - ``error`` (str | None): Error description when not ok.
+        """
+        if not self.ready:
+            return {
+                "ok": False,
+                "latency_ms": 0,
+                "model": self.default_model,
+                "error": "GenX client is not configured (missing api_key, base_url, or default_model).",
+            }
+        started = time.perf_counter()
+        try:
+            result = await self.generate_text(
+                "Reply with one word: ok",
+                system="You are a health-check assistant.",
+                task="copy",
+                max_tokens=5,
+            )
+            latency_ms = int((time.perf_counter() - started) * 1000)
+            if result:
+                return {"ok": True, "latency_ms": latency_ms, "model": result.get("model", ""), "error": None}
+            return {
+                "ok": False,
+                "latency_ms": latency_ms,
+                "model": self.default_model,
+                "error": "GenX returned an empty response during health check.",
+            }
+        except Exception as exc:
+            latency_ms = int((time.perf_counter() - started) * 1000)
+            return {
+                "ok": False,
+                "latency_ms": latency_ms,
+                "model": self.default_model,
+                "error": str(exc),
+            }
 
     def _endpoint(self) -> str:
         if self.base_url.endswith("/chat/completions"):
@@ -114,21 +160,47 @@ class GenXClient:
             try:
                 async with httpx.AsyncClient(timeout=self.timeout) as client:
                     resp = await client.post(endpoint, headers=headers, json=payload)
+                latency_ms = int((time.perf_counter() - started) * 1000)
                 if resp.status_code >= 400:
+                    logger.warning(
+                        "GenX model '%s' returned HTTP %s (latency=%dms). Trying next candidate.",
+                        candidate,
+                        resp.status_code,
+                        latency_ms,
+                    )
                     continue
                 data = resp.json()
                 text = self._extract_text(data)
                 if not text:
+                    logger.debug("GenX model '%s' returned empty text. Trying next candidate.", candidate)
                     continue
                 usage = data.get("usage", {}) if isinstance(data, dict) else {}
+                logger.debug(
+                    "GenX model '%s' succeeded (latency=%dms, tokens=%s).",
+                    candidate,
+                    latency_ms,
+                    usage.get("total_tokens", "?"),
+                )
                 return {
                     "text": text,
                     "provider": "genx",
                     "model": candidate,
                     "tokens": usage.get("total_tokens", 0),
                     "cost_usd": usage.get("cost_usd", 0.0),
-                    "latency_ms": int((time.perf_counter() - started) * 1000),
+                    "latency_ms": latency_ms,
                 }
-            except Exception:
+            except Exception as exc:
+                latency_ms = int((time.perf_counter() - started) * 1000)
+                logger.warning(
+                    "GenX model '%s' raised an exception after %dms: %s",
+                    candidate,
+                    latency_ms,
+                    exc,
+                )
                 continue
+        logger.error(
+            "All GenX model candidates exhausted without a successful response. "
+            "Candidates tried: %s. Check GENX_API_KEY, GENX_BASE_URL, and model configuration.",
+            model_candidates,
+        )
         return None
