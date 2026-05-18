@@ -158,8 +158,16 @@ def get_provider_readiness() -> dict:
     })
 
     providers.append({
-        "provider": "qwen",
+        "provider": "genx",
         "role": "primary_local",
+        "ready": bool(settings.GENX_API_KEY),
+        "capabilities": ["reasoning", "analysis", "long_form", "moderation"],
+        "cost_tier": "variable",
+        "notes": "GenX unified provider with multi-model routing",
+    })
+    providers.append({
+        "provider": "qwen",
+        "role": "secondary_fallback",
         "ready": bool(settings.QWEN_API_KEY),
         "capabilities": ["reasoning"],
         "cost_tier": "low",
@@ -267,7 +275,7 @@ def get_capability_gaps() -> list[dict]:
         })
 
     # Check AI providers
-    if not (settings.QWEN_API_KEY or settings.HUGGINGFACE_TOKEN or settings.OPENAI_API_KEY):
+    if not (settings.GENX_API_KEY or settings.QWEN_API_KEY or settings.HUGGINGFACE_TOKEN or settings.OPENAI_API_KEY):
         gaps.append({
             "capability": "ai_generation",
             "classification": 2,
@@ -286,7 +294,7 @@ def get_connection_state() -> dict:
         and settings.AMARKTAI_DASHBOARD_URL
         and settings.AMARKTAI_INTEGRATION_TOKEN
     )
-    ai_ready = bool(settings.QWEN_API_KEY or settings.HUGGINGFACE_TOKEN or settings.OPENAI_API_KEY)
+    ai_ready = bool(settings.GENX_API_KEY or settings.QWEN_API_KEY or settings.HUGGINGFACE_TOKEN or settings.OPENAI_API_KEY)
     billing_ready = bool(settings.STRIPE_SECRET_KEY)
     email_ready = bool(settings.RESEND_API_KEY)
 

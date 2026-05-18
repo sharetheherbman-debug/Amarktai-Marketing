@@ -65,34 +65,44 @@ def _get_openai_key(db: Session, user: User) -> str | None:
     return settings.OPENAI_API_KEY or None
 
 
+def _get_genx_key(db: Session, user: User) -> str | None:
+    from app.core.config import settings
+    from app.models.user_api_key import UserAPIKey
+    row = db.query(UserAPIKey).filter(
+        UserAPIKey.user_id == user.id,
+        UserAPIKey.key_name == "GENX_API_KEY",
+        UserAPIKey.is_active == True,
+    ).first()
+    if row:
+        return row.get_decrypted_key()
+    return settings.GENX_API_KEY or None
+
+
 async def _generate_text_content(
     webapp_data: dict,
     platform: str,
     hf_token: str | None,
     openai_key: str | None,
     qwen_key: str | None = None,
+    genx_key: str | None = None,
 ) -> dict:
-    """AI provider chain: primary → fallback → optional polish → template fallback."""
+    """Unified AI provider chain with GenX-first routing and template fallback."""
+    from app.services.ai_provider import AIProvider
     from app.services.hf_generator import HuggingFaceGenerator
-    result: dict | None = None
-    # Use whichever token is available; qwen_key takes precedence
-    active_token = qwen_key or hf_token
-    if active_token:
-        try:
-            gen = HuggingFaceGenerator(hf_token or "", qwen_key=qwen_key or "")
-            result = await gen.generate_content(webapp_data, platform)
-            if openai_key and result and not result.get("_generation_error"):
-                try:
-                    from app.services.openai_service import OpenAIOrchestrator
-                    result = await OpenAIOrchestrator(openai_key).validate_and_improve(result, webapp_data, platform)
-                except Exception:
-                    pass
-        except Exception:
-            result = None
-    if not result:
-        from app.services.hf_generator import HuggingFaceGenerator
-        result = HuggingFaceGenerator._fallback_content(webapp_data, platform)
-    return result
+
+    provider = AIProvider.from_keys(
+        genx_key=genx_key or "",
+        qwen_key=qwen_key or "",
+        hf_token=hf_token or "",
+        openai_key=openai_key or "",
+    )
+    try:
+        result = await provider.generate_content(webapp_data, platform)
+        if result and result.get("caption"):
+            return result
+    except Exception:
+        pass
+    return HuggingFaceGenerator._fallback_content(webapp_data, platform)
 
 
 @router.get("/", response_model=List[Content])
@@ -152,6 +162,7 @@ async def generate_content(
     hf_token = _get_hf_token(db, current_user)
     openai_key = _get_openai_key(db, current_user)
     qwen_key = _get_qwen_key(db, current_user)
+    genx_key = _get_genx_key(db, current_user)
 
     webapp_data = {
         "name": webapp.name,
@@ -162,11 +173,11 @@ async def generate_content(
         "key_features": webapp.key_features or [],
     }
 
-    result = await _generate_text_content(webapp_data, platform, hf_token, openai_key, qwen_key)
+    result = await _generate_text_content(webapp_data, platform, hf_token, openai_key, qwen_key, genx_key)
     media_urls = await get_media_url(platform, webapp_data, qwen_key or hf_token)
     content_type = "video" if platform in VIDEO_PLATFORMS else "image"
     # Determine whether AI generation was used (internal flag, not exposed to users)
-    ai_used = not result.get("_generation_error") and bool(qwen_key or hf_token)
+    ai_used = not result.get("_generation_error") and bool(genx_key or qwen_key or hf_token)
 
     db_content = ContentModel(
         id=str(uuid.uuid4()),
@@ -204,6 +215,7 @@ async def generate_all_content(
     hf_token = _get_hf_token(db, current_user)
     openai_key = _get_openai_key(db, current_user)
     qwen_key = _get_qwen_key(db, current_user)
+    genx_key = _get_genx_key(db, current_user)
 
     webapps = db.query(WebApp).filter(WebApp.user_id == current_user.id, WebApp.is_active == True).all()
     if not webapps:
@@ -233,27 +245,27 @@ async def generate_all_content(
             "key_features": webapp.key_features or [],
         }
 
-        active_token = qwen_key or hf_token
+        active_token = genx_key or qwen_key or hf_token
         if active_token:
             try:
-                gen = HuggingFaceGenerator(hf_token or "", qwen_key=qwen_key or "")
-                results = await gen.generate_batch(webapp_data, platforms)
+                from app.services.ai_provider import AIProvider
+                provider = AIProvider.from_keys(
+                    genx_key=genx_key or "",
+                    qwen_key=qwen_key or "",
+                    hf_token=hf_token or "",
+                    openai_key=openai_key or "",
+                )
+                results = await provider.generate_batch(webapp_data, platforms)
             except Exception:
                 results = {p: HuggingFaceGenerator._fallback_content(webapp_data, p) for p in platforms}
         else:
             results = {p: HuggingFaceGenerator._fallback_content(webapp_data, p) for p in platforms}
 
         ai_used = bool(active_token)
+        generator_name = "genx" if genx_key else ("qwen" if qwen_key else ("huggingface" if hf_token else "template"))
         for platform, content_dict in results.items():
             if content_dict.get("_generation_error") and not content_dict.get("caption"):
                 continue
-            if openai_key and not content_dict.get("_generation_error"):
-                try:
-                    from app.services.openai_service import OpenAIOrchestrator
-                    content_dict = await OpenAIOrchestrator(openai_key).validate_and_improve(content_dict, webapp_data, platform)
-                except Exception:
-                    pass
-
             media_urls = await get_media_url(platform, webapp_data, active_token)
             content_type = "video" if platform in VIDEO_PLATFORMS else "image"
             db_content = ContentModel(
@@ -337,6 +349,7 @@ async def reject_content(
             hf_token = _get_hf_token(async_db, user)
             qwen_key = _get_qwen_key(async_db, user)
             openai_key = _get_openai_key(async_db, user)
+            genx_key = _get_genx_key(async_db, user)
             webapp_data = {
                 "name": webapp.name,
                 "url": str(webapp.url),
@@ -346,11 +359,11 @@ async def reject_content(
                 "key_features": webapp.key_features or [],
             }
             result = await _generate_text_content(
-                webapp_data, rejected_platform, hf_token, openai_key, qwen_key
+                webapp_data, rejected_platform, hf_token, openai_key, qwen_key, genx_key
             )
             media_urls = await get_media_url(rejected_platform, webapp_data, qwen_key or hf_token)
             content_type = "video" if rejected_platform in VIDEO_PLATFORMS else "image"
-            generator_name = "qwen" if qwen_key else ("huggingface" if hf_token else "template")
+            generator_name = "genx" if genx_key else ("qwen" if qwen_key else ("huggingface" if hf_token else "template"))
             new_content = ContentModel(
                 id=str(uuid.uuid4()),
                 user_id=user_id,

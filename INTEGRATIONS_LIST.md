@@ -10,13 +10,14 @@ Third-party integrations grouped by category. Configure each via environment var
 
 | Integration         | Env Variable          | Status        | Notes                                      |
 |---------------------|-----------------------|---------------|--------------------------------------------|
-| Qwen (DashScope)    | `QWEN_API_KEY`        | ✅ Required   | Primary LLM for all content generation     |
-| HuggingFace         | `HUGGINGFACE_TOKEN`   | ✅ Required   | Fallback LLM when Qwen is unavailable      |
+| GenX                | `GENX_API_KEY`        | ✅ Required   | Primary unified provider for all AI tasks  |
+| Qwen (DashScope)    | `QWEN_API_KEY`        | ⬜ Optional   | Legacy fallback provider                   |
+| HuggingFace         | `HUGGINGFACE_TOKEN`   | ⬜ Optional   | Legacy fallback provider                   |
 | Firecrawl           | `FIRECRAWL_API_KEY`   | ⭐ Recommended| Web scraping for competitor intelligence   |
 | OpenAI              | `OPENAI_API_KEY`      | ⬜ Optional   | GPT-4 class enhancement                    |
 | Gemini (Google)     | `GEMINI_API_KEY`      | ⬜ Optional   | Gemini class enhancement                   |
 
-Provider fallback order: **Qwen → HuggingFace → OpenAI → Gemini**
+Provider fallback order: **GenX → Qwen → HuggingFace → OpenAI → Gemini**
 
 ---
 

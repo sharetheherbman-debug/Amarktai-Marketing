@@ -43,7 +43,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     const token = localStorage.getItem('amarktai_token');
-    fetch('/api/v1/dashboard/insights', {
+    fetch('/api/v1/dashboard/stats', {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     })
       .then((r) => r.json())

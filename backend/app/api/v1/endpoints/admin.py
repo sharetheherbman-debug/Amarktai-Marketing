@@ -82,6 +82,7 @@ async def admin_health(
     # Check configured system keys
     configured_keys: list[str] = []
     key_names = [
+        "GENX_API_KEY",
         "QWEN_API_KEY",
         "HUGGINGFACE_TOKEN",
         "OPENAI_API_KEY",
@@ -125,6 +126,17 @@ async def admin_health(
 
 _ALLOWED_SYSTEM_KEYS = {
     "HUGGINGFACE_TOKEN",
+    "GENX_API_KEY",
+    "GENX_BASE_URL",
+    "GENX_DEFAULT_MODEL",
+    "GENX_TIMEOUT",
+    "GENX_MODEL_ALLOWLIST",
+    "GENX_MODEL_FALLBACKS",
+    "GENX_MODEL_COPY",
+    "GENX_MODEL_STRATEGY",
+    "GENX_MODEL_ANALYSIS",
+    "GENX_MODEL_LONG_FORM",
+    "GENX_MODEL_MODERATION",
     "QWEN_API_KEY",
     "OPENAI_API_KEY",
     "GROQ_API_KEY",

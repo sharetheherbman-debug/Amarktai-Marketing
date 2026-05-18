@@ -48,6 +48,50 @@ class PerformancePredictRequest(BaseModel):
     media_urls: list[str] = []
 
 
+@router.get("/stats")
+async def get_dashboard_stats(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Return high-level dashboard KPI stats."""
+    posted_count = db.query(func.count(Content.id)).filter(
+        Content.user_id == current_user.id,
+        Content.status == ContentStatus.POSTED,
+    ).scalar() or 0
+
+    leads_captured = db.query(func.count(Analytics.id)).filter(
+        Analytics.user_id == current_user.id,
+    ).scalar() or 0
+
+    engagement_rate_avg = db.query(
+        func.avg(
+            case(
+                (
+                    (Content.views > 0),
+                    ((Content.likes + Content.comments + Content.shares) * 100.0) / Content.views,
+                ),
+                else_=0.0,
+            )
+        )
+    ).filter(
+        Content.user_id == current_user.id,
+        Content.status == ContentStatus.POSTED,
+    ).scalar() or 0.0
+
+    tokens_used = db.query(
+        func.coalesce(func.sum(Content.llm_tokens_used), 0)
+    ).filter(
+        Content.user_id == current_user.id,
+    ).scalar() or 0
+
+    return {
+        "postsPublished": int(posted_count),
+        "engagementRate": f"{float(engagement_rate_avg):.1f}%",
+        "leadsCaptures": int(leads_captured),
+        "tokensUsed": int(tokens_used),
+    }
+
+
 # ─── AI Insights Feed ────────────────────────────────────────────────────────
 
 @router.get("/insights")

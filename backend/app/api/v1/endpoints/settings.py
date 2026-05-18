@@ -48,22 +48,14 @@ def _mask(value: str | None) -> str:
 
 def _encrypt(value: str) -> str:
     """Encrypt a plaintext value using the app encryption key."""
-    try:
-        from app.models.user_api_key import UserAPIKey
-        return UserAPIKey.encrypt_key(value)
-    except Exception:
-        return f"enc:{value}"
+    from app.models.user_api_key import UserAPIKey
+    return UserAPIKey.encrypt_key(value)
 
 
 def _decrypt(value: str) -> str:
     """Decrypt an encrypted value."""
-    try:
-        from app.models.user_api_key import UserAPIKey
-        return UserAPIKey.decrypt_key(value)
-    except Exception:
-        if value.startswith("enc:"):
-            return value[4:]
-        return value
+    from app.models.user_api_key import UserAPIKey
+    return UserAPIKey.decrypt_key(value)
 
 
 # ── GET /settings ─────────────────────────────────────────────────────────────
@@ -118,7 +110,14 @@ async def update_settings(
 
 # ── GET /settings/api-keys ────────────────────────────────────────────────────
 
-_PROVIDER_KEYS = ["QWEN_API_KEY", "HUGGINGFACE_TOKEN", "OPENAI_API_KEY", "GEMINI_API_KEY", "FIRECRAWL_API_KEY"]
+_PROVIDER_KEYS = [
+    "GENX_API_KEY",
+    "QWEN_API_KEY",
+    "HUGGINGFACE_TOKEN",
+    "OPENAI_API_KEY",
+    "GEMINI_API_KEY",
+    "FIRECRAWL_API_KEY",
+]
 
 
 @router.get("/api-keys")

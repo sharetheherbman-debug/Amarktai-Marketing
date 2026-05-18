@@ -23,6 +23,8 @@ import re
 from typing import Any
 
 import httpx
+from app.core.config import settings
+from app.services.genx_client import GenXClient
 
 # Default free model – works on the free/Pro tier without a PRO subscription
 _DEFAULT_MODEL = "mistralai/Mistral-7B-Instruct-v0.2"
@@ -176,9 +178,18 @@ class HuggingFaceGenerator:
     Also provides general NLP utilities (summarise, sentiment, classify).
     """
 
-    def __init__(self, hf_token: str, model: str = _DEFAULT_MODEL, qwen_key: str = ""):
+    def __init__(
+        self,
+        hf_token: str,
+        model: str = _DEFAULT_MODEL,
+        qwen_key: str = "",
+        genx_key: str = "",
+    ):
         self.hf_token = hf_token
         self.qwen_key = qwen_key  # QWEN_API_KEY (DashScope or HF)
+        self.genx_key = genx_key or settings.GENX_API_KEY
+        self._genx = GenXClient(api_key=self.genx_key)
+        self._genx_enabled = bool(self.genx_key and self._genx.ready)
         # If a Qwen key is provided, prefer the Qwen model via HF Serverless
         if qwen_key:
             self.model = _QWEN_MODEL
@@ -286,6 +297,13 @@ JSON format:
         """Summarise text using BART."""
         if len(text) < 100:
             return text
+        if self._genx_enabled:
+            prompt = (
+                f"Summarize the following text in under {max_length} words while preserving key marketing insights:\n\n"
+                f"{text[:1800]}"
+            )
+            raw = await self._call_text_generation(self._inference_url, prompt, max_tokens=220)
+            return raw[:1000] if raw else text[:200]
         url = _HF_INFERENCE_URL.format(model=_SUMMARIZE_MODEL)
         payload = {
             "inputs": text[:1024],
@@ -308,6 +326,23 @@ JSON format:
         Classify text sentiment.
         Returns {"label": "POSITIVE"|"NEGATIVE"|"NEUTRAL", "score": float}
         """
+        if self._genx_enabled:
+            prompt = (
+                "Classify sentiment for this text as POSITIVE, NEGATIVE, or NEUTRAL. "
+                "Return ONLY JSON: {\"label\":\"...\",\"score\":0.0}\n\n"
+                f"Text: {text[:700]}"
+            )
+            raw = await self._call_text_generation(self._inference_url, prompt, max_tokens=120)
+            try:
+                match = re.search(r"\{.*\}", raw, re.DOTALL)
+                if match:
+                    obj = json.loads(_clean_json(match.group()))
+                    return {
+                        "label": str(obj.get("label", "NEUTRAL")).upper(),
+                        "score": round(float(obj.get("score", 0.5)), 3),
+                    }
+            except Exception:
+                pass
         url = _HF_INFERENCE_URL.format(model=_SENTIMENT_MODEL)
         payload = {"inputs": text[:512]}
         try:
@@ -330,6 +365,20 @@ JSON format:
         Zero-shot classification.
         Returns {label: score} dict sorted by descending score.
         """
+        if self._genx_enabled:
+            prompt = (
+                "Score how relevant each label is to the text. "
+                "Return ONLY JSON object where keys are labels and values are scores between 0 and 1.\n\n"
+                f"Labels: {candidate_labels}\n\nText: {text[:700]}"
+            )
+            raw = await self._call_text_generation(self._inference_url, prompt, max_tokens=220)
+            try:
+                match = re.search(r"\{.*\}", raw, re.DOTALL)
+                if match:
+                    obj = json.loads(_clean_json(match.group()))
+                    return {k: float(v) for k, v in obj.items() if k in candidate_labels}
+            except Exception:
+                pass
         url = _HF_INFERENCE_URL.format(model=_ZERO_SHOT_MODEL)
         payload = {
             "inputs": text[:512],
@@ -935,6 +984,15 @@ Respond ONLY with a JSON object with these exact keys:
     async def _call_text_generation(
         self, url: str, prompt: str, max_tokens: int = 512
     ) -> str:
+        if self._genx_enabled:
+            result = await self._genx.generate_text(
+                prompt,
+                system="You are an expert AI assistant for marketing content generation.",
+                task="copy",
+                max_tokens=max_tokens,
+            )
+            if result and result.get("text"):
+                return str(result["text"])
         payload = {
             "inputs": prompt,
             "parameters": {
@@ -1002,4 +1060,3 @@ Respond ONLY with a JSON object with these exact keys:
             "hashtags": ["AI", "Marketing", "Growth", "AmarktAINetwork"],
             "_generation_error": error,
         }
-

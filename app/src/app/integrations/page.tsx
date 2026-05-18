@@ -16,6 +16,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from 'sonner';
 import { PLATFORM_COUNT } from '@/lib/platformConstants';
+import { getStoredToken } from '@/lib/auth';
 
 interface APIKey {
   id: string;
@@ -35,11 +36,12 @@ interface PlatformIntegration {
 }
 
 const AVAILABLE_API_KEYS = [
+  { key: 'GENX_API_KEY', name: 'GenX API Key', description: 'Primary unified AI provider for all AI features (REQUIRED)', provider: 'GenX', required: true },
   { key: 'FIRECRAWL_API_KEY', name: 'Firecrawl API Key', description: 'Web scraping & competitive research (REQUIRED)', provider: 'Firecrawl', required: true },
-  { key: 'QWEN_API_KEY', name: 'Qwen / DashScope API Key', description: 'Primary LLM for content generation (REQUIRED)', provider: 'Qwen (DashScope)', required: true },
-  { key: 'HUGGINGFACE_TOKEN', name: 'HuggingFace Token', description: 'Fallback LLM if Qwen is unavailable (recommended)', provider: 'HuggingFace', required: false },
-  { key: 'OPENAI_API_KEY', name: 'OpenAI API Key', description: 'Optional enhancement for content generation', provider: 'OpenAI', required: false },
-  { key: 'GEMINI_API_KEY', name: 'Google Gemini API Key', description: 'Optional enhancement for content generation', provider: 'Google Gemini', required: false },
+  { key: 'QWEN_API_KEY', name: 'Qwen / DashScope API Key', description: 'Legacy fallback provider', provider: 'Qwen (DashScope)', required: false },
+  { key: 'HUGGINGFACE_TOKEN', name: 'HuggingFace Token', description: 'Legacy fallback provider', provider: 'HuggingFace', required: false },
+  { key: 'OPENAI_API_KEY', name: 'OpenAI API Key', description: 'Optional compatibility fallback', provider: 'OpenAI', required: false },
+  { key: 'GEMINI_API_KEY', name: 'Google Gemini API Key', description: 'Optional compatibility fallback', provider: 'Google Gemini', required: false },
 ];
 
 const PLATFORMS = [
@@ -74,15 +76,18 @@ export default function IntegrationsPage() {
   const fetchData = async () => {
     try {
       setIsLoading(true);
+      const token = getStoredToken();
+      const authHeaders: Record<string, string> = {};
+      if (token) authHeaders.Authorization = `Bearer ${token}`;
       
       // Fetch API keys
-      const keysRes = await fetch('/api/v1/integrations/api-keys');
+      const keysRes = await fetch('/api/v1/integrations/api-keys', { headers: authHeaders });
       if (keysRes.ok) {
         setApiKeys(await keysRes.json());
       }
       
       // Fetch integrations
-      const integrationsRes = await fetch('/api/v1/integrations/platforms');
+      const integrationsRes = await fetch('/api/v1/integrations/platforms', { headers: authHeaders });
       if (integrationsRes.ok) {
         setIntegrations(await integrationsRes.json());
       }
@@ -101,9 +106,13 @@ export default function IntegrationsPage() {
 
     setIsSaving(true);
     try {
+      const token = getStoredToken();
       const res = await fetch('/api/v1/integrations/api-keys', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify({ key_name: selectedKeyType, key_value: keyValue }),
       });
 
@@ -125,8 +134,10 @@ export default function IntegrationsPage() {
 
   const handleDeleteKey = async (keyId: string) => {
     try {
+      const token = getStoredToken();
       const res = await fetch(`/api/v1/integrations/api-keys/${keyId}`, {
         method: 'DELETE',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
 
       if (res.ok) {
@@ -142,7 +153,10 @@ export default function IntegrationsPage() {
 
   const handleConnectPlatform = async (platform: string) => {
     try {
-      const res = await fetch(`/api/v1/integrations/platforms/${platform}/connect`);
+      const token = getStoredToken();
+      const res = await fetch(`/api/v1/integrations/platforms/${platform}/connect`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
       if (res.ok) {
         const data = await res.json();
         // Open OAuth popup
@@ -165,8 +179,10 @@ export default function IntegrationsPage() {
 
   const handleDisconnectPlatform = async (platform: string) => {
     try {
+      const token = getStoredToken();
       const res = await fetch(`/api/v1/integrations/platforms/${platform}/disconnect`, {
         method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
 
       if (res.ok) {
@@ -182,9 +198,13 @@ export default function IntegrationsPage() {
 
   const handleUpdateIntegration = async (platform: string, updates: Partial<PlatformIntegration>) => {
     try {
+      const token = getStoredToken();
       const res = await fetch(`/api/v1/integrations/platforms/${platform}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify(updates),
       });
 
@@ -228,10 +248,10 @@ export default function IntegrationsPage() {
                   {
                     step: '1',
                     icon: Key,
-                    title: 'Add Qwen / DashScope API Key (Primary LLM)',
-                    desc: 'Required for AI content generation. Get your key at dashscope.aliyuncs.com.',
+                    title: 'Add GenX API Key (Primary AI Provider)',
+                    desc: 'Required for AI content generation. Add your GenX key to enable all AI features.',
                     link: '#',
-                    done: apiKeys.some(k => k.key_name === 'QWEN_API_KEY' && k.is_active),
+                    done: apiKeys.some(k => k.key_name === 'GENX_API_KEY' && k.is_active),
                   },
                   {
                     step: '2',
@@ -330,7 +350,7 @@ export default function IntegrationsPage() {
               Your API Keys
             </CardTitle>
             <CardDescription>
-              Configure your provider API keys. Firecrawl and Qwen are required for full functionality.
+              Configure your provider API keys. GenX and Firecrawl are required for full functionality.
             </CardDescription>
           </div>
           <Button onClick={() => setShowAddKeyDialog(true)}>
@@ -343,7 +363,7 @@ export default function IntegrationsPage() {
             <div className="text-center py-8 text-gray-500">
               <Key className="w-12 h-12 mx-auto mb-4 text-gray-300" />
               <p>No API keys added yet</p>
-              <p className="text-sm">Add Firecrawl and Qwen keys to get started</p>
+              <p className="text-sm">Add GenX and Firecrawl keys to get started</p>
             </div>
           ) : (
             <div className="space-y-3">

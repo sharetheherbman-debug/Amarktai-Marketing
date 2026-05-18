@@ -26,7 +26,7 @@ Route: **Dashboard → Businesses → Add / Edit Business → Additional Scraper
 ## Core AI Features
 
 ### AI Content Generation ✅
-Generate platform-optimised content for 10+ social networks. Supports long-form, short-form, threads, captions, and hashtag packs. Uses the Qwen → HuggingFace provider chain with optional OpenAI/Gemini enhancement.
+Generate platform-optimised content for 10+ social networks. Supports long-form, short-form, threads, captions, and hashtag packs. Uses GenX as the primary provider with fallback to Qwen/HuggingFace and optional OpenAI/Gemini compatibility.
 
 ### Viral Predictor ✅
 Analyses content before publishing and assigns a viral probability score. Factors in trending topics, audience engagement patterns, and historical platform data.
@@ -120,10 +120,11 @@ The platform uses a tiered provider approach to maximise uptime and cost efficie
 | Priority | Provider       | Role                                  |
 |----------|----------------|---------------------------------------|
 | 1        | Firecrawl      | Web scraping and competitive research |
-| 2        | Qwen (DashScope) | Primary LLM for all generation tasks |
-| 3        | HuggingFace    | Fallback LLM when Qwen is unavailable |
-| 4        | OpenAI         | Optional enhancement (GPT-4 class)    |
-| 5        | Gemini         | Optional enhancement (Gemini class)   |
+| 2        | GenX           | Primary unified LLM router            |
+| 3        | Qwen (DashScope) | Legacy fallback LLM                 |
+| 4        | HuggingFace    | Legacy fallback LLM                   |
+| 5        | OpenAI         | Optional enhancement (GPT-4 class)    |
+| 6        | Gemini         | Optional enhancement (Gemini class)   |
 
 If a higher-priority provider fails or returns an error, the system automatically falls back to the next available provider. Only Qwen and HuggingFace keys are required for the platform to be fully operational.
 
@@ -139,4 +140,3 @@ The following limitations apply to the current beta release:
 | SMTP / transactional email | ⬜ Deferred (beta)      | Email delivery (SendGrid, Mailgun, etc.) is not configured. Will be added post-beta.       |
 | AmarktAI Network brain     | 🔮 Future               | The internal AmarktAI super brain is under development. Current generation stack is Firecrawl + Qwen + HuggingFace (+ optional OpenAI/Gemini). |
 | Platform OAuth             | ⚙️ Requires credentials | OAuth flows are wired. Each platform requires its own API credentials in `backend/.env`.  |
-
