@@ -1,147 +1,100 @@
 # MARKETING_GO_LIVE_AUDIT_REPORT
 
-## What was fixed
+## Tested commit
 
-1. **Domain and deployment corrections (PR #4 repair)**
-   - Replaced marketing deployment guidance/config from wrong builder-domain assumptions to `marketing.amarktai.com`.
-   - Removed builder Nginx site template and added `deploy/nginx/marketing.amarktai.com.conf` for host Nginx + systemd backend + static frontend.
-   - Added `deploy/systemd/amarktai-marketing-api.service` for backend runtime on `127.0.0.1:8010`.
-   - Updated deploy script and verification script to production truth.
+- Commit SHA: `d1193a7b8884bf7c6d72ea54d3d99ed1fcbd8532`
 
-2. **Systemd/static production path retained**
-   - Deployment docs now target:
-     - repo: `/var/www/amarktai-marketing/repo`
-     - backend service: `amarktai-marketing-api.service`
-     - static frontend root: `/var/www/amarktai-marketing/current/app/dist`
-   - Docker Compose remains documented as local/future only with `COMPOSE_PROJECT_NAME=amarktai_marketing`.
+## Exact scripts/checks run in this audit session
 
-3. **DB migration/live repair safety**
-   - Alembic migration files updated to use explicit string lengths for MySQL/MariaDB compatibility.
-   - Added idempotent live repair script: `scripts/repair_live_user_columns.py` to add missing `users` columns/index/fk only.
-   - Deployment docs now explain when to run Alembic vs live repair script.
+1. `python -m compileall backend`
+2. `cd app && npm run lint` *(baseline repo lint still fails on pre-existing frontend rules)*
+3. `cd app && npm run build`
+4. `python -m compileall backend` *(post-change)*
+5. `cd app && npm run build` *(post-change)*
 
-4. **Groups disabled for go-live stability**
-   - Removed Groups from dashboard navigation.
-   - Replaced `/dashboard/groups` with a safe “coming later” page.
+## New go-live gate scripts added
 
-5. **AI generation truthfulness + social rules**
-   - Content generation now reports `generation_status` as `configured` or `not_configured` based on GenX availability.
-   - Added explicit degraded messaging when `GENX_API_KEY` is missing.
-   - Added data-driven social guardrails module `backend/app/services/social_rules.py` and wired guidance into prompt generation.
+- `scripts/test_genx_models.sh`
+- `scripts/test_autonomous_generation.sh`
+- `scripts/test_scheduler_flow.sh`
+- `scripts/test_posting_readiness.sh`
+- `scripts/test_learning_loop.sh`
+- `scripts/marketing_full_go_live_gate.sh`
 
-6. **Learning loop and metrics ingestion**
-   - Added analytics endpoints for manual metrics and CSV import:
-     - `POST /api/v1/analytics/manual-metrics`
-     - `POST /api/v1/analytics/import-csv`
-     - `GET /api/v1/analytics/learning-status`
-   - Added content score calculation and learning status in analytics summary.
-   - Dashboard and analytics UI now reflect learning active/inactive based on metric records.
+## Pass/fail table (this session)
 
-7. **Readiness/integrations truthfulness**
-   - Added `GET /api/v1/settings/readiness` returning configured/not_configured states for core providers and OAuth credentials.
-   - Integrations UI now shows go-live readiness checklist and missing required items.
+| Check | Status | Notes |
+|---|---|---|
+| Backend compile/import | PASS | `python -m compileall backend` succeeds |
+| Frontend build | PASS | `npm run build` succeeds |
+| Frontend lint | FAIL (pre-existing) | Existing repo-wide lint issues unrelated to this hardening pass |
+| GenX model discovery endpoint | IMPLEMENTED | `/api/v1/settings/genx/models` |
+| GenX per-model test endpoint | IMPLEMENTED | `/api/v1/settings/genx/test-models` |
+| Readiness GenX hardening fields | IMPLEMENTED | `configured/health_ok/models_tested/required_models_ok/failed_models/last_checked_at` |
+| Publishing readiness endpoints | IMPLEMENTED | `/api/v1/publishing/readiness`, `/test-platform`, `/post-now` |
+| Scheduler endpoints | IMPLEMENTED | `/api/v1/scheduler/schedule`, `/upcoming` |
+| Social rules endpoints | IMPLEMENTED | `/api/v1/social-rules`, `/api/v1/social-rules/{platform}` |
+| Learning-status extended fields | IMPLEMENTED | includes mode/blockers/last/next run fields |
+| Full authenticated smoke scripts | NOT EXECUTED IN SANDBOX | Require `MARKETING_TEST_EMAIL` + `MARKETING_TEST_PASSWORD` against a running target |
 
-8. **Smoke scripts added**
-   - `scripts/marketing_local_check.sh`
-   - `scripts/marketing_go_live_smoke.sh`
+## GenX model status
 
-## Files changed
+- Required model health cannot be declared from repository-only static audit.
+- Runtime verification now enforced through:
+  - `POST /api/v1/settings/genx/test-models`
+  - `scripts/test_genx_models.sh`
+- Go-live readiness now marks `go_live_ready=false` when required GenX model checks are failing/missing.
 
-- `DEPLOYMENT_GUIDE.md`
-- `DEPLOY_CHECKLIST.md`
-- `README.md`
-- `MARKETING_GO_LIVE_AUDIT_REPORT.md`
-- `docker-compose.yml`
-- `deploy/docker-compose.env.example`
-- `deploy/deploy.sh`
-- `deploy/ecosystem.config.cjs`
-- `deploy/app-registration.json`
-- `deploy/nginx/marketing.amarktai.com.conf` (added)
-- `deploy/nginx/builder.amarktai.com.conf` (removed)
-- `deploy/systemd/amarktai-marketing-api.service` (added)
-- `deploy/verify-marketing-go-live.sh` (added)
-- `deploy/verify-builder-go-live.sh` (removed)
-- `scripts/marketing_local_check.sh` (added)
-- `scripts/marketing_go_live_smoke.sh` (added)
-- `scripts/repair_live_user_columns.py` (added)
-- `backend/.env.example`
-- `backend/alembic/versions/0001_initial.py`
-- `backend/alembic/versions/0002_power_tools.py`
-- `backend/alembic/versions/0003_leads_new_platforms.py`
-- `backend/alembic/versions/0004_blog_posts.py`
-- `backend/alembic/versions/0005_business_groups.py`
-- `backend/alembic/versions/0007_platform_ad_budget.py`
-- `backend/alembic/versions/0008_jwt_auth.py`
-- `backend/app/api/v1/endpoints/content.py`
-- `backend/app/api/v1/endpoints/analytics.py`
-- `backend/app/api/v1/endpoints/settings.py`
-- `backend/app/schemas/analytics.py`
-- `backend/app/services/hf_generator.py`
-- `backend/app/services/social_rules.py` (added)
-- `app/src/app/groups/page.tsx`
-- `app/src/components/layout/DashboardLayout.tsx`
-- `app/src/components/dashboard/ContentStudio.tsx`
-- `app/src/app/integrations/page.tsx`
-- `app/src/app/analytics/page.tsx`
-- `app/src/app/dashboard/page.tsx`
-- `app/src/lib/api.ts`
-- `app/src/types/index.ts`
+## Providers configured (truth model)
 
-## Remaining blockers
+- Provider readiness is now surfaced from `/api/v1/settings/readiness`.
+- GenX readiness is no longer treated as simply “key exists”; it now includes runtime health + required-model checks.
 
-1. **Frontend lint baseline is still failing due pre-existing repo-wide lint violations** (unrelated to this go-live repair; build passes).
-2. **Live secrets are not stored in repository** — production keys must be present on VPS `.env`.
-3. **Actual provider connectivity must be validated on VPS runtime** (GenX/social/email/Stripe) after env is set.
+## Social platforms posting truth
 
-## Exact production deploy commands for this VPS
+Per-platform readiness now exposes:
 
-```bash
-cd /var/www/amarktai-marketing/repo
-git pull --ff-only
+- `oauth_configured`
+- `user_connected`
+- `token_valid`
+- `scopes_ok`
+- `posting_supported`
+- `analytics_supported`
+- `rate_limit_known`
+- `can_post_now`
+- `missing`
 
-cd backend
-python3 -m venv venv
-./venv/bin/pip install -r requirements.txt
-./venv/bin/alembic upgrade head
-cd ..
-python3 scripts/repair_live_user_columns.py
+Current implementation intentionally marks unsupported/incomplete live-posting paths as **posting not implemented** and blocks autonomous posting for those paths.
 
-cd app
-npm install
-npm run build
-sudo mkdir -p /var/www/amarktai-marketing/current/app/dist
-sudo rsync -a --delete dist/ /var/www/amarktai-marketing/current/app/dist/
-cd ..
+## Platform posting categories (truthful policy)
 
-sudo cp deploy/systemd/amarktai-marketing-api.service /etc/systemd/system/amarktai-marketing-api.service
-sudo systemctl daemon-reload
-sudo systemctl enable amarktai-marketing-api.service
-sudo systemctl restart amarktai-marketing-api.service
+- **Can be ready for real posting when credentials + connection + token + scopes + target mapping are valid:** facebook, instagram, linkedin, reddit, pinterest
+- **Generate/schedule-only or blocked for posting in current implementation:** twitter/x, tiktok, youtube (explicit “posting not implemented” guard in `/publishing/post-now`)
 
-sudo cp deploy/nginx/marketing.amarktai.com.conf /etc/nginx/sites-available/marketing.amarktai.com
-sudo ln -sf /etc/nginx/sites-available/marketing.amarktai.com /etc/nginx/sites-enabled/marketing.amarktai.com
-sudo nginx -t
-sudo systemctl reload nginx
+## Missing keys and blockers (runtime-dependent)
 
-./deploy/verify-marketing-go-live.sh
-./scripts/marketing_go_live_smoke.sh
-```
+Typical blockers remain runtime/environment dependent until deployed secrets are present:
 
-## Key/integration status (configured vs still required)
+- `GENX_API_KEY` (and valid model configuration)
+- OAuth app credentials per platform
+- User OAuth connections/tokens/scopes
+- Optional: `FIRECRAWL_API_KEY`, `RESEND_API_KEY`, Stripe keys/webhook
 
-Repository code now reports these truthfully at `/api/v1/settings/readiness`.
-From repo alone (without VPS runtime env), these should be treated as **still required until confirmed on server**:
+## Autonomous mode status
 
-- **GENX_API_KEY**: required for full real AI generation.
-- **Social OAuth credentials**: required per platform to mark configured.
-- **Email provider (RESEND_API_KEY)**: optional for core posting, required for configured email workflows.
-- **Stripe keys/webhook secret**: optional unless paid billing is enabled.
-- **Firecrawl key**: optional but recommended for scraper intelligence.
+- Status model:
+  - `enabled` only when required readiness gates pass
+  - `blocked` when posting/approval gates are unmet
+  - `degraded` when GenX is not configured/healthy
+- This is now surfaced via generation metadata + readiness/publishing checks rather than optimistic assumptions.
 
-## Go / No-Go verdict
+## Final go/no-go verdict
 
-**Conditional GO**
+**Conditional NO-GO for “All systems go” at this exact moment in this sandbox**.
 
-Go-live code-path repairs are in place for `marketing.amarktai.com`, groups are safely disabled, migrations/repair tooling is present, backend import check passes, frontend build passes, and readiness is now truthful.
+Reason:
 
-Final go-live is **conditional** on VPS env/key configuration verification and successful smoke run in production.
+- Authenticated end-to-end gate scripts were not executable here without live credentials/runtime target.
+- “All systems go” must only be declared after `scripts/marketing_full_go_live_gate.sh` passes with required production keys and integrations configured.
+
+When those scripts pass on the live target with required keys, go-live can be promoted to **GO**.

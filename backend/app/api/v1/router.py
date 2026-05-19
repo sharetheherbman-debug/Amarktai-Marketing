@@ -5,7 +5,7 @@ from app.api.v1.endpoints import (
     integrations, engagement, ab_testing, cost_tracking, autonomous, admin,
     remix, tools, leads, groups, blog, oauth, billing, events,
     amarktai_status, dashboard, settings, contact,
-    stats, changelog, notifications,
+    stats, changelog, notifications, scheduler, publishing, social_rules,
 )
 
 api_router = APIRouter()
@@ -48,6 +48,9 @@ api_router.include_router(amarktai_status.router, prefix="/amarktai", tags=["int
 
 # Settings & preferences (user API keys, billing, notifications)
 api_router.include_router(settings.router, prefix="/settings", tags=["settings"])
+api_router.include_router(scheduler.router, prefix="/scheduler", tags=["scheduler"])
+api_router.include_router(publishing.router, prefix="/publishing", tags=["publishing"])
+api_router.include_router(social_rules.router, prefix="/social-rules", tags=["social-rules"])
 
 # Stripe billing (checkout, webhook, portal)
 api_router.include_router(billing.router, prefix="/billing", tags=["billing"])

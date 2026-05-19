@@ -22,6 +22,7 @@ from app.db.base import get_db
 from app.models.content import Content as ContentModel, ContentStatus
 from app.models.user import User
 from app.schemas.content import Content, ContentUpdate
+from app.services.social_rules import get_social_rule, resolve_platform_key
 
 router = APIRouter()
 
@@ -103,6 +104,50 @@ async def _generate_text_content(
     except Exception:
         pass
     return HuggingFaceGenerator._fallback_content(webapp_data, platform)
+
+
+def _compliance_for(platform: str, caption: str) -> dict:
+    rule = get_social_rule(resolve_platform_key(platform))
+    text = (caption or "").lower()
+    high_risk_terms = ["guaranteed", "cure", "financial advice", "get rich", "medical advice", "legal advice"]
+    flagged = [term for term in high_risk_terms if term in text]
+    review_required = bool(flagged)
+    risk_level = "high" if flagged else "low"
+    return {
+        "risk_level": risk_level,
+        "flags": flagged,
+        "notes": (rule.compliance_notes if rule else []),
+        "summary": (
+            f"Human review required due to risky claims: {', '.join(flagged)}"
+            if flagged
+            else "No high-risk terms detected; conservative policy checks passed."
+        ),
+        "human_review_required": review_required,
+    }
+
+
+def _generation_package(platform: str, result: dict, provider_name: str, generation_status: str, generation_message: str, genx_configured: bool) -> dict:
+    caption = result.get("caption", "")
+    compliance = _compliance_for(platform, caption)
+    hashtags = result.get("hashtags", [])
+    hook = caption.split("\n", 1)[0][:120] if caption else ""
+    cta = "Learn more" if "http" in caption else "Tell us what you think"
+    suggested_post_time = (get_social_rule(resolve_platform_key(platform)).best_times_b2c[0] if get_social_rule(resolve_platform_key(platform)) else "Wed 12:00")
+    return {
+        "ai_generated": provider_name != "template",
+        "generation_status": generation_status,
+        "provider": provider_name,
+        "model": result.get("model", ""),
+        "message": generation_message,
+        "requires": [] if genx_configured else ["GENX_API_KEY"],
+        "hook": hook,
+        "cta": cta,
+        "hashtags": hashtags,
+        "suggested_post_time": suggested_post_time,
+        "compliance": compliance,
+        "compliance_flags": compliance["flags"],
+        "human_review_required": compliance["human_review_required"],
+    }
 
 
 @router.get("/", response_model=List[Content])
@@ -198,13 +243,7 @@ async def generate_content(
         caption=result.get("caption", ""),
         hashtags=result.get("hashtags", []),
         media_urls=media_urls,
-        generation_metadata={
-            "ai_generated": ai_used,
-            "generation_status": generation_status,
-            "provider": provider_name,
-            "message": generation_message,
-            "requires": [] if genx_configured else ["GENX_API_KEY"],
-        },
+        generation_metadata=_generation_package(platform, result, provider_name, generation_status, generation_message, genx_configured),
     )
     db.add(db_content)
     db.commit()
@@ -293,11 +332,15 @@ async def generate_all_content(
                 hashtags=content_dict.get("hashtags", []),
                 media_urls=media_urls,
                 generation_metadata={
+                    **_generation_package(
+                        platform,
+                        content_dict,
+                        generator_name,
+                        generation_status,
+                        "GENX configured: live AI generation enabled." if genx_key else "GENX_API_KEY is missing; batch generation is running in degraded mode.",
+                        bool(genx_key),
+                    ),
                     "source": "manual_batch",
-                    "ai_generated": ai_used,
-                    "generation_status": generation_status,
-                    "provider": generator_name,
-                    "message": "GENX configured: live AI generation enabled." if genx_key else "GENX_API_KEY is missing; batch generation is running in degraded mode.",
                 },
             )
             db.add(db_content)
@@ -398,7 +441,14 @@ async def reject_content(
                 hashtags=result.get("hashtags", []),
                 media_urls=media_urls,
                 generation_metadata={
-                    "generator": generator_name,
+                    **_generation_package(
+                        rejected_platform,
+                        result,
+                        generator_name,
+                        "configured" if genx_key else "not_configured",
+                        "Regenerated after rejection.",
+                        bool(genx_key),
+                    ),
                     "source": "reject_regen",
                     "replaced_content_id": content_id,
                 },

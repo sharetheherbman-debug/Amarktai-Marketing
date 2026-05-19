@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
+import hashlib
 from typing import Any
 
 import httpx
@@ -94,6 +95,17 @@ class GenXClient:
         if self.base_url.endswith("/chat/completions"):
             return self.base_url
         return f"{self.base_url}/chat/completions"
+
+    def _models_endpoint_candidates(self) -> list[str]:
+        base = self.base_url
+        if base.endswith("/chat/completions"):
+            base = base[: -len("/chat/completions")]
+        base = base.rstrip("/")
+        return [
+            f"{base}/models",
+            f"{base}/model/list",
+            f"{base}/models/list",
+        ]
 
     def _model_for_task(self, task: str, requested_model: str | None = None) -> list[str]:
         primary = requested_model or self.task_models.get(task) or self.default_model
@@ -204,3 +216,92 @@ class GenXClient:
             model_candidates,
         )
         return None
+
+    async def list_models(self) -> dict[str, Any]:
+        if not self.api_key or not self.base_url:
+            return {"ok": False, "source": "not_configured", "models": [], "error": "GenX API key/base URL not configured."}
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "X-API-Key": self.api_key,
+            "Content-Type": "application/json",
+        }
+        for endpoint in self._models_endpoint_candidates():
+            try:
+                async with httpx.AsyncClient(timeout=self.timeout) as client:
+                    resp = await client.get(endpoint, headers=headers)
+                if resp.status_code >= 400:
+                    continue
+                data = resp.json()
+                models: list[str] = []
+                if isinstance(data, dict):
+                    if isinstance(data.get("data"), list):
+                        for item in data["data"]:
+                            if isinstance(item, dict) and item.get("id"):
+                                models.append(str(item["id"]))
+                            elif isinstance(item, str):
+                                models.append(item)
+                    elif isinstance(data.get("models"), list):
+                        for item in data["models"]:
+                            if isinstance(item, dict) and item.get("id"):
+                                models.append(str(item["id"]))
+                            elif isinstance(item, str):
+                                models.append(item)
+                elif isinstance(data, list):
+                    for item in data:
+                        if isinstance(item, dict) and item.get("id"):
+                            models.append(str(item["id"]))
+                        elif isinstance(item, str):
+                            models.append(item)
+                if models:
+                    return {"ok": True, "source": "provider_api", "models": sorted(set(models)), "error": None}
+            except Exception:
+                continue
+        return {"ok": False, "source": "configured_env", "models": [], "error": "Model listing endpoint unavailable."}
+
+    async def test_model(
+        self,
+        model: str,
+        *,
+        task: str = "copy",
+        prompt: str = "Return exactly: ok",
+    ) -> dict[str, Any]:
+        started = time.perf_counter()
+        if not self.ready:
+            return {
+                "model": model,
+                "task": task,
+                "ok": False,
+                "latency_ms": 0,
+                "error": "GenX not configured",
+                "sample_hash": "",
+                "sample_preview": "",
+            }
+        result = await self.generate_text(
+            prompt,
+            task=task,
+            system="You are a concise model test assistant.",
+            max_tokens=32,
+            temperature=0.1,
+            model=model,
+        )
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        if not result:
+            return {
+                "model": model,
+                "task": task,
+                "ok": False,
+                "latency_ms": latency_ms,
+                "error": "No response",
+                "sample_hash": "",
+                "sample_preview": "",
+            }
+        text = str(result.get("text", "")).strip()
+        return {
+            "model": model,
+            "task": task,
+            "ok": bool(text),
+            "latency_ms": latency_ms,
+            "error": None if text else "Empty response",
+            "sample_hash": hashlib.sha256(text.encode()).hexdigest()[:16] if text else "",
+            "sample_preview": text[:80],
+        }
