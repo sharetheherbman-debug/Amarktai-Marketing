@@ -1,290 +1,121 @@
-import { useEffect, useState } from 'react';
-import { Eye, Heart, MessageCircle, Share2, MousePointer, Calendar, Search, Wand2, BarChart3, Target, Repeat } from 'lucide-react';
-import { Card, CardContent } from '@/components/ui/card';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { Calendar, Loader2, PenTool } from 'lucide-react';
+
 import { Badge } from '@/components/ui/badge';
-import { Input } from '@/components/ui/input';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
-import type { Content } from '@/types';
-import { contentApi } from '@/lib/api';
-import { format } from 'date-fns';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { ContentStudio } from '@/components/dashboard/ContentStudio';
-import { CompetitorIntel } from '@/components/dashboard/CompetitorIntel';
-import { ContentRepurposer } from '@/components/dashboard/ContentRepurposer';
-
-const platformIcons: Record<string, string> = {
-  youtube: '▶️',
-  tiktok: '🎵',
-  instagram: '📷',
-  facebook: '👥',
-  twitter: '🐦',
-  linkedin: '💼',
-};
-
-const statusColors: Record<string, string> = {
-  pending: 'bg-yellow-100 text-yellow-700',
-  approved: 'bg-blue-100 text-blue-700',
-  posted: 'bg-green-100 text-green-700',
-  rejected: 'bg-red-100 text-red-700',
-  failed: 'bg-gray-100 text-gray-700',
-};
+import { contentApi, webAppApi } from '@/lib/api';
+import type { Content, WebApp } from '@/types';
 
 export default function ContentPage() {
+  const [searchParams] = useSearchParams();
+  const initialBusinessId = searchParams.get('business') ?? undefined;
+  const [businesses, setBusinesses] = useState<WebApp[]>([]);
   const [content, setContent] = useState<Content[]>([]);
   const [loading, setLoading] = useState(true);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [activeTab, setActiveTab] = useState('all');
 
-  useEffect(() => {
-    fetchContent();
-  }, []);
-
-  const fetchContent = async () => {
+  const load = async () => {
     try {
-      const data = await contentApi.getAll();
-      setContent(data);
-    } catch (error) {
-      console.error('Failed to load content');
+      const [loadedBusinesses, loadedContent] = await Promise.all([
+        webAppApi.getAll(),
+        contentApi.getAll(),
+      ]);
+      setBusinesses(loadedBusinesses);
+      setContent(loadedContent);
     } finally {
       setLoading(false);
     }
   };
 
-  const filteredContent = content.filter(item => {
-    const matchesSearch = item.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         item.caption.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesTab = activeTab === 'all' || item.status === activeTab;
-    return matchesSearch && matchesTab;
-  });
+  useEffect(() => {
+    void load();
+  }, []);
 
-  const contentByStatus = {
-    all: content.length,
-    pending: content.filter(c => c.status === 'pending').length,
-    approved: content.filter(c => c.status === 'approved').length,
-    posted: content.filter(c => c.status === 'posted').length,
-    rejected: content.filter(c => c.status === 'rejected').length,
-  };
+  const library = useMemo(() => content.slice(0, 8), [content]);
 
   if (loading) {
     return (
-      <div className="space-y-4">
-        <div className="h-8 bg-gray-200 rounded w-48" />
-        <div className="grid gap-4">
-          {[...Array(3)].map((_, i) => (
-            <Card key={i} className="animate-pulse">
-              <CardContent className="p-6">
-                <div className="h-4 bg-gray-200 rounded w-3/4" />
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+      <div className="flex min-h-[320px] items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-blue-400" />
       </div>
     );
   }
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
-          <h2 className="text-2xl font-bold">Content Studio</h2>
-          <p className="text-gray-500">Create, manage, and optimize your content</p>
+          <h1 className="text-2xl font-bold text-white">Content Studio</h1>
+          <p className="mt-2 max-w-2xl text-sm text-slate-400">
+            Select a real business profile, choose a platform, set the objective and tone, then generate content. No hidden setup or fake default business IDs.
+          </p>
         </div>
-        <Button className="bg-gradient-to-r from-violet-600 to-indigo-600">
-          <Wand2 className="w-4 h-4 mr-2" />
-          Create New
-        </Button>
+        <Link to="/dashboard/scheduler">
+          <Button variant="outline" className="border-[#252A3A] bg-transparent text-slate-200 hover:bg-white/5">
+            <Calendar className="mr-2 h-4 w-4" />
+            Open Scheduler
+          </Button>
+        </Link>
       </div>
 
-      {/* Main Tabs */}
-      <Tabs defaultValue="library" className="w-full">
-        <TabsList className="grid grid-cols-5 w-full max-w-3xl">
-          <TabsTrigger value="library">
-            <BarChart3 className="w-4 h-4 mr-2" />
-            Library
-          </TabsTrigger>
-          <TabsTrigger value="studio">
-            <Wand2 className="w-4 h-4 mr-2" />
-            AI Studio
-          </TabsTrigger>
-          <TabsTrigger value="repurposer">
-            <Repeat className="w-4 h-4 mr-2" />
-            Repurposer
-          </TabsTrigger>
-          <TabsTrigger value="intel">
-            <Target className="w-4 h-4 mr-2" />
-            Intelligence
-          </TabsTrigger>
-          <TabsTrigger value="calendar">
-            <Calendar className="w-4 h-4 mr-2" />
-            Calendar
-          </TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="library" className="space-y-6">
-          {/* Search and Filter */}
-          <div className="flex flex-col sm:flex-row gap-4">
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
-              <Input
-                placeholder="Search content..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-10"
-              />
+      {businesses.length === 0 ? (
+        <Card className="border-dashed border-blue-500/30 bg-[#0D0F14]">
+          <CardContent className="flex flex-col items-start gap-4 p-8">
+            <div className="rounded-2xl bg-blue-500/15 p-3 text-blue-300">
+              <PenTool className="h-6 w-6" />
             </div>
-          </div>
+            <div>
+              <h2 className="text-xl font-semibold text-white">Add Business</h2>
+              <p className="mt-2 text-sm text-slate-400">Content Studio stays empty until a real business profile exists.</p>
+            </div>
+            <Link to="/dashboard/businesses/new">
+              <Button className="bg-blue-600 hover:bg-blue-500">Add Business</Button>
+            </Link>
+          </CardContent>
+        </Card>
+      ) : (
+        <ContentStudio
+          initialBusinessId={initialBusinessId}
+          onGenerated={(items) => setContent((current) => [...items, ...current])}
+        />
+      )}
 
-          {/* Content Status Tabs */}
-          <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className="grid grid-cols-5 w-full max-w-2xl">
-          <TabsTrigger value="all">
-            All ({contentByStatus.all})
-          </TabsTrigger>
-          <TabsTrigger value="pending">
-            Pending ({contentByStatus.pending})
-          </TabsTrigger>
-          <TabsTrigger value="approved">
-            Approved ({contentByStatus.approved})
-          </TabsTrigger>
-          <TabsTrigger value="posted">
-            Posted ({contentByStatus.posted})
-          </TabsTrigger>
-          <TabsTrigger value="rejected">
-            Rejected ({contentByStatus.rejected})
-          </TabsTrigger>
-        </TabsList>
-
-        <TabsContent value={activeTab} className="mt-6">
-          {filteredContent.length === 0 ? (
-            <Card>
-              <CardContent className="p-12 text-center">
-                <p className="text-gray-500">No content found</p>
-              </CardContent>
-            </Card>
+      <Card className="border-[#252A3A] bg-[#0D0F14]">
+        <CardHeader>
+          <CardTitle>Recent generated content</CardTitle>
+          <CardDescription>Newest drafts across all businesses.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {library.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-[#252A3A] bg-[#141720] p-4 text-sm text-slate-400">
+              No drafts yet. Generate content above, then review and schedule it.
+            </div>
           ) : (
-            <div className="space-y-4">
-              {filteredContent.map((item) => (
-                <Card key={item.id}>
-                  <CardContent className="p-6">
-                    <div className="flex flex-col lg:flex-row lg:items-start gap-4">
-                      {/* Media Preview */}
-                      <div className="w-full lg:w-48 h-32 bg-gray-100 rounded-lg overflow-hidden flex-shrink-0">
-                        {item.mediaUrls[0] ? (
-                          <img 
-                            src={item.mediaUrls[0]} 
-                            alt={item.title}
-                            className="w-full h-full object-cover"
-                          />
-                        ) : (
-                          <div className="w-full h-full flex items-center justify-center text-gray-400">
-                            <span className="text-4xl">{platformIcons[item.platform]}</span>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Content Details */}
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center space-x-2 mb-2">
-                          <span className="text-lg">{platformIcons[item.platform]}</span>
-                          <Badge variant="outline" className="capitalize">
-                            {item.platform}
-                          </Badge>
-                          <Badge className={statusColors[item.status]}>
-                            {item.status}
-                          </Badge>
-                          <Badge variant="outline" className="capitalize">
-                            {item.type}
-                          </Badge>
-                        </div>
-
-                        <h3 className="font-semibold text-lg mb-1">{item.title}</h3>
-                        <p className="text-gray-600 text-sm line-clamp-2 mb-3">
-                          {item.caption}
-                        </p>
-
-                        <div className="flex flex-wrap gap-2 mb-3">
-                          {item.hashtags.map((tag, i) => (
-                            <span key={i} className="text-xs text-violet-600 bg-violet-50 px-2 py-1 rounded">
-                              #{tag}
-                            </span>
-                          ))}
-                        </div>
-
-                        <div className="flex items-center text-sm text-gray-500 space-x-4">
-                          <span className="flex items-center">
-                            <Calendar className="w-4 h-4 mr-1" />
-                            {format(new Date(item.createdAt), 'MMM d, yyyy')}
-                          </span>
-                          {item.scheduledFor && (
-                            <span className="flex items-center">
-                              <span className="w-2 h-2 bg-blue-500 rounded-full mr-2" />
-                              Scheduled for {format(new Date(item.scheduledFor), 'MMM d, h:mm a')}
-                            </span>
-                          )}
-                          {item.postedAt && (
-                            <span className="flex items-center text-green-600">
-                              <span className="w-2 h-2 bg-green-500 rounded-full mr-2" />
-                              Posted on {format(new Date(item.postedAt), 'MMM d')}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Performance Stats */}
-                      {item.performance && (
-                        <div className="flex flex-wrap lg:flex-col gap-3 lg:w-32">
-                          <div className="flex items-center text-sm">
-                            <Eye className="w-4 h-4 mr-1 text-gray-400" />
-                            <span>{item.performance.views.toLocaleString()}</span>
-                          </div>
-                          <div className="flex items-center text-sm">
-                            <Heart className="w-4 h-4 mr-1 text-pink-400" />
-                            <span>{item.performance.likes.toLocaleString()}</span>
-                          </div>
-                          <div className="flex items-center text-sm">
-                            <MessageCircle className="w-4 h-4 mr-1 text-blue-400" />
-                            <span>{item.performance.comments.toLocaleString()}</span>
-                          </div>
-                          <div className="flex items-center text-sm">
-                            <Share2 className="w-4 h-4 mr-1 text-green-400" />
-                            <span>{item.performance.shares.toLocaleString()}</span>
-                          </div>
-                          <div className="flex items-center text-sm">
-                            <MousePointer className="w-4 h-4 mr-1 text-violet-400" />
-                            <span>{item.performance.ctr}% CTR</span>
-                          </div>
-                        </div>
-                      )}
+            library.map((item) => {
+              const metadata = (item.generationMetadata as Record<string, unknown> | undefined) ?? {};
+              return (
+                <div key={item.id} className="rounded-xl border border-[#252A3A] bg-[#141720] p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="font-medium capitalize text-white">{item.platform}</p>
+                      <p className="text-xs text-slate-400">{item.status}</p>
                     </div>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Badge className="border border-[#252A3A] bg-[#0D0F14] text-slate-200">{String(metadata.scrape_status || 'unknown')}</Badge>
+                      <Badge className={Boolean(metadata.degraded) ? 'border border-amber-500/30 bg-amber-500/15 text-amber-300' : 'border border-emerald-500/30 bg-emerald-500/15 text-emerald-300'}>
+                        {Boolean(metadata.degraded) ? 'Degraded' : 'Ready'}
+                      </Badge>
+                    </div>
+                  </div>
+                  <p className="mt-3 line-clamp-3 text-sm text-slate-300">{item.caption}</p>
+                </div>
+              );
+            })
           )}
-        </TabsContent>
-      </Tabs>
-        </TabsContent>
-
-        <TabsContent value="studio">
-          <ContentStudio />
-        </TabsContent>
-
-        <TabsContent value="repurposer">
-          <ContentRepurposer />
-        </TabsContent>
-
-        <TabsContent value="intel">
-          <CompetitorIntel />
-        </TabsContent>
-
-        <TabsContent value="calendar">
-          <div className="text-center py-12">
-            <Calendar className="w-16 h-16 text-slate-400 mx-auto mb-4" />
-            <h3 className="text-lg font-medium text-slate-300 mb-2">Content Calendar</h3>
-            <p className="text-slate-500">View your scheduled content in calendar format</p>
-          </div>
-        </TabsContent>
-      </Tabs>
+        </CardContent>
+      </Card>
     </div>
   );
 }

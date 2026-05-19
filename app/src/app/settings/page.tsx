@@ -1,467 +1,246 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Bell, Clock, Shield, User, CreditCard, Sparkles, Key, ExternalLink, Loader2 } from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Switch } from '@/components/ui/switch';
-import { Label } from '@/components/ui/label';
-import { Input } from '@/components/ui/input';
-import { Badge } from '@/components/ui/badge';
+import { useCallback, useEffect, useState } from 'react';
+import { AlertTriangle, Bell, Building2, ExternalLink, Loader2, Settings2, Shield, User } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
+
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
 import { useAuth } from '@/lib/auth';
-
-const cardStyle = {
-  background: 'rgba(17,24,39,0.72)',
-  border: '1px solid rgba(255,255,255,0.10)',
-};
-
-// ─── API helpers ─────────────────────────────────────────────────────────────
-
-async function settingsFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const token = localStorage.getItem('amarktai_token');
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-  const res = await fetch(`/api/v1/settings${path}`, { ...init, headers });
-  if (!res.ok) throw new Error(`Settings API ${res.status}`);
-  return res.json() as Promise<T>;
-}
+import { settingsApi } from '@/lib/api';
 
 interface SettingsData {
   timezone: string;
   language: string;
   notification_email: boolean;
   notification_digest: boolean;
-  auto_post_enabled: boolean;
-  auto_reply_enabled: boolean;
-  plan_tier: string;
 }
 
-interface BillingData {
-  plan_tier: string;
-  quota_used: number;
-  quota_limit: number;
-  quota_remaining: number;
+function statusBadge(status?: string) {
+  if (status === 'test_passed') return 'border border-emerald-500/30 bg-emerald-500/15 text-emerald-300';
+  if (status === 'test_failed') return 'border border-red-500/30 bg-red-500/15 text-red-300';
+  return 'border border-amber-500/30 bg-amber-500/15 text-amber-300';
 }
-
-// ─── Plan display helpers ────────────────────────────────────────────────────
-
-const PLAN_DISPLAY: Record<string, { label: string; price: string }> = {
-  free: { label: 'Free', price: '$0/month' },
-  pro: { label: 'Pro', price: '$29/month' },
-  business: { label: 'Business', price: '$99/month' },
-  enterprise: { label: 'Enterprise', price: 'Custom' },
-};
 
 export default function SettingsPage() {
   const { user } = useAuth();
-
-  // ── Loading / fetched state ─────────────────────────────────────────────
   const [loading, setLoading] = useState(true);
   const [savingNotifications, setSavingNotifications] = useState(false);
-  const [savingPreferences, setSavingPreferences] = useState(false);
-  const [savingAutomation, setSavingAutomation] = useState(false);
+  const [savingWorkspace, setSavingWorkspace] = useState(false);
+  const [workspace, setWorkspace] = useState({ timezone: 'UTC', language: 'en' });
+  const [notifications, setNotifications] = useState({ emailDaily: true, emailWeekly: true });
+  const [readiness, setReadiness] = useState<Record<string, unknown> | null>(null);
+  const [providerResolution, setProviderResolution] = useState<Record<string, unknown> | null>(null);
 
-  // ── Notification state ──────────────────────────────────────────────────
-  const [notifications, setNotifications] = useState({
-    emailDaily: true,
-    emailWeekly: true,
-  });
+  const authHeaders = useCallback(() => {
+    const token = localStorage.getItem('amarktai_token');
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  }, []);
 
-  // ── Preferences state ───────────────────────────────────────────────────
-  const [preferences, setPreferences] = useState({
-    postingTime: '10:00',
-    timezone: 'America/New_York',
-    language: 'en',
-  });
-
-  // ── Automation state ────────────────────────────────────────────────────
-  const [autoPost, setAutoPost] = useState(false);
-  const [autoReply, setAutoReply] = useState(false);
-  const [organicMode, setOrganicMode] = useState(true);
-
-  // ── Billing state ───────────────────────────────────────────────────────
-  const [billing, setBilling] = useState<BillingData | null>(null);
-
-  // ── Fetch settings from backend on mount ────────────────────────────────
-  const fetchSettings = useCallback(async () => {
+  const load = useCallback(async () => {
     try {
-      const [settingsData, billingData] = await Promise.all([
-        settingsFetch<SettingsData>(''),
-        settingsFetch<BillingData>('/billing'),
+      const tokenHeaders = authHeaders();
+      const [settingsRes, readinessData, providerData] = await Promise.all([
+        fetch('/api/v1/settings', { headers: tokenHeaders }),
+        settingsApi.getReadiness(),
+        settingsApi.getProviderResolution(),
       ]);
-      setPreferences({
-        postingTime: '10:00',
-        timezone: settingsData.timezone || 'America/New_York',
-        language: settingsData.language || 'en',
-      });
-      setNotifications({
-        emailDaily: settingsData.notification_email ?? true,
-        emailWeekly: settingsData.notification_digest ?? true,
-      });
-      setAutoPost(settingsData.auto_post_enabled ?? false);
-      setAutoReply(settingsData.auto_reply_enabled ?? false);
-      setBilling(billingData);
+      if (settingsRes.ok) {
+        const settingsData = (await settingsRes.json()) as SettingsData;
+        setWorkspace({ timezone: settingsData.timezone || 'UTC', language: settingsData.language || 'en' });
+        setNotifications({
+          emailDaily: settingsData.notification_email ?? true,
+          emailWeekly: settingsData.notification_digest ?? true,
+        });
+      }
+      setReadiness(readinessData);
+      setProviderResolution(providerData);
     } catch {
-      toast.error('Failed to load settings — using defaults');
+      toast.error('Failed to load settings');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [authHeaders]);
 
-  useEffect(() => { fetchSettings(); }, [fetchSettings]);
+  useEffect(() => {
+    void load();
+  }, [load]);
 
-  // ── Save notifications ──────────────────────────────────────────────────
-  const handleSaveNotifications = async () => {
+  const saveNotifications = async () => {
     setSavingNotifications(true);
     try {
-      await settingsFetch('', {
+      const res = await fetch('/api/v1/settings', {
         method: 'PUT',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({
           notification_email: notifications.emailDaily,
           notification_digest: notifications.emailWeekly,
         }),
       });
+      if (!res.ok) throw new Error();
       toast.success('Notification preferences saved');
     } catch {
-      toast.error('Failed to save notification preferences');
+      toast.error('Failed to save notifications');
     } finally {
       setSavingNotifications(false);
     }
   };
 
-  // ── Save preferences ────────────────────────────────────────────────────
-  const handleSavePreferences = async () => {
-    setSavingPreferences(true);
+  const saveWorkspace = async () => {
+    setSavingWorkspace(true);
     try {
-      await settingsFetch('', {
+      const res = await fetch('/api/v1/settings', {
         method: 'PUT',
-        body: JSON.stringify({
-          timezone: preferences.timezone,
-          language: preferences.language,
-        }),
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ timezone: workspace.timezone, language: workspace.language }),
       });
-      toast.success('Preferences saved');
+      if (!res.ok) throw new Error();
+      toast.success('Workspace defaults saved');
     } catch {
-      toast.error('Failed to save preferences');
+      toast.error('Failed to save workspace defaults');
     } finally {
-      setSavingPreferences(false);
+      setSavingWorkspace(false);
     }
   };
-
-  // ── Save automation ─────────────────────────────────────────────────────
-  const handleSaveAutomation = async () => {
-    setSavingAutomation(true);
-    try {
-      await settingsFetch('', {
-        method: 'PUT',
-        body: JSON.stringify({
-          auto_post_enabled: autoPost,
-          auto_reply_enabled: autoReply,
-        }),
-      });
-      toast.success('Automation settings saved');
-    } catch {
-      toast.error('Failed to save automation settings');
-    } finally {
-      setSavingAutomation(false);
-    }
-  };
-
-  // ── Derived plan display ────────────────────────────────────────────────
-  const planTier = billing?.plan_tier ?? 'free';
-  const planInfo = PLAN_DISPLAY[planTier] ?? PLAN_DISPLAY.free;
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-[300px]">
-        <Loader2 className="w-6 h-6 animate-spin text-blue-400" />
+      <div className="flex min-h-[320px] items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-blue-400" />
       </div>
     );
   }
 
+  const providerDetails = (readiness?.provider_details as Record<string, { status?: string }> | undefined) ?? {};
+  const providers = (providerResolution?.providers as Record<string, { effective_source?: string }> | undefined) ?? {};
+
   return (
-    <div className="space-y-6 max-w-3xl">
+    <div className="mx-auto max-w-5xl space-y-6">
       <div>
-        <h2 className="text-2xl font-bold text-slate-100">Settings</h2>
-        <p className="text-slate-400">Manage your workspace, notifications, and preferences</p>
+        <h1 className="text-2xl font-bold text-white">Settings</h1>
+        <p className="mt-2 text-sm text-slate-400">Minimal workspace settings only. Provider keys and social connections are managed in Integrations.</p>
       </div>
 
-      {/* Plan Info — live from billing API */}
-      <Card style={{ background: 'linear-gradient(135deg, rgba(37,99,255,0.15) 0%, rgba(34,211,238,0.08) 100%)', border: '1px solid rgba(37,99,255,0.25)' }}>
-        <CardContent className="p-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium" style={{ color: '#4F7DFF' }}>Current Plan</p>
-              <h3 className="text-2xl font-bold text-white">{planInfo.label}</h3>
-              <p className="text-sm mt-1 text-slate-300">{planInfo.price}</p>
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Card className="border-[#252A3A] bg-[#0D0F14]">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-white"><User className="h-5 w-5 text-blue-300" />Account</CardTitle>
+            <CardDescription>Read-only account summary.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm text-slate-300">
+            <div className="rounded-xl border border-[#252A3A] bg-[#141720] p-4">
+              <p className="text-xs uppercase tracking-wide text-slate-500">Name</p>
+              <p className="mt-2 text-white">{user?.name || 'Account user'}</p>
             </div>
-            <Button
-              variant="outline"
-              style={{ borderColor: 'rgba(255,255,255,0.15)', color: '#CBD5E1' }}
-              onClick={async () => {
-                try {
-                  const token = localStorage.getItem('amarktai_token');
-                  const res = await fetch('/api/v1/billing/portal-session', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-                  });
-                  const data = await res.json();
-                  if (data.url) window.location.href = data.url;
-                  else toast.error(data.detail || 'Unable to open billing portal');
-                } catch { toast.error('Failed to open billing portal'); }
-              }}
-            >
-              <CreditCard className="w-4 h-4 mr-2" />
-              Manage Subscription
+            <div className="rounded-xl border border-[#252A3A] bg-[#141720] p-4">
+              <p className="text-xs uppercase tracking-wide text-slate-500">Email</p>
+              <p className="mt-2 text-white">{user?.email || 'No email available'}</p>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="border-[#252A3A] bg-[#0D0F14]">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-white"><Building2 className="h-5 w-5 text-blue-300" />Workspace / business defaults</CardTitle>
+            <CardDescription>Preferences that shape the workspace, not provider credentials.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-2">
+                <Label className="text-slate-200">Timezone</Label>
+                <Input value={workspace.timezone} onChange={(event) => setWorkspace((current) => ({ ...current, timezone: event.target.value }))} className="border-[#252A3A] bg-[#141720] text-white" />
+              </div>
+              <div className="space-y-2">
+                <Label className="text-slate-200">Language</Label>
+                <Input value={workspace.language} onChange={(event) => setWorkspace((current) => ({ ...current, language: event.target.value }))} className="border-[#252A3A] bg-[#141720] text-white" />
+              </div>
+            </div>
+            <Button onClick={saveWorkspace} disabled={savingWorkspace} className="bg-blue-600 hover:bg-blue-500">
+              {savingWorkspace ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Save workspace defaults
             </Button>
-          </div>
-          {billing && (
-            <div className="mt-4 pt-4" style={{ borderTop: '1px solid rgba(37,99,255,0.2)' }}>
-              <div className="flex flex-wrap gap-2">
-                <Badge variant="outline" style={{ borderColor: 'rgba(255,255,255,0.15)', color: '#CBD5E1' }}>
-                  {billing.quota_used} / {billing.quota_limit} posts used
-                </Badge>
-                <Badge variant="outline" style={{ borderColor: 'rgba(255,255,255,0.15)', color: '#CBD5E1' }}>
-                  {billing.quota_remaining} remaining
-                </Badge>
-              </div>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
 
-      {/* Notifications */}
-      <Card style={cardStyle}>
-        <CardHeader>
-          <CardTitle className="flex items-center text-slate-100">
-            <Bell className="w-5 h-5 mr-2" />
-            Notifications
-          </CardTitle>
-          <CardDescription className="text-slate-400">
-            Choose how you want to be notified
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          <div className="space-y-4">
-            <h4 className="font-medium text-xs uppercase tracking-widest text-slate-500">Email Notifications</h4>
-            <div className="flex items-center justify-between">
+        <Card className="border-[#252A3A] bg-[#0D0F14] lg:col-span-2">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-white"><Settings2 className="h-5 w-5 text-blue-300" />Runtime status</CardTitle>
+            <CardDescription>Provider keys are managed in Integrations.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="rounded-xl border border-[#252A3A] bg-[#141720] p-4 text-sm text-slate-300">
+              Provider Keys are managed in Integrations.
+              <Link to="/dashboard/integrations" className="ml-2 inline-flex items-center gap-1 font-medium text-blue-300">
+                Open Integrations
+                <ExternalLink className="h-3.5 w-3.5" />
+              </Link>
+            </div>
+            <div className="grid gap-4 md:grid-cols-3">
+              {[
+                { label: 'GenX', status: providerDetails.genx?.status, source: providers.GENX_API_KEY?.effective_source },
+                { label: 'Firecrawl', status: providerDetails.firecrawl?.status, source: providers.FIRECRAWL_API_KEY?.effective_source },
+                { label: 'Fallback providers', status: 'optional', source: [providers.QWEN_API_KEY?.effective_source, providers.HUGGINGFACE_TOKEN?.effective_source, providers.OPENAI_API_KEY?.effective_source, providers.GEMINI_API_KEY?.effective_source].filter(Boolean).join(', ') || 'Not configured' },
+              ].map((item) => (
+                <div key={item.label} className="rounded-xl border border-[#252A3A] bg-[#141720] p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="font-medium text-white">{item.label}</p>
+                    <Badge className={item.status === 'optional' ? 'border border-[#252A3A] bg-[#0D0F14] text-slate-200' : statusBadge(item.status)}>
+                      {item.status === 'optional' ? 'optional' : (item.status || 'missing')}
+                    </Badge>
+                  </div>
+                  <p className="mt-2 text-xs text-slate-400">Source: {item.source || 'missing'}</p>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="border-[#252A3A] bg-[#0D0F14]">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-white"><Bell className="h-5 w-5 text-blue-300" />Notifications</CardTitle>
+            <CardDescription>Simple notification preferences.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex items-center justify-between rounded-xl border border-[#252A3A] bg-[#141720] p-4">
               <div>
-                <Label htmlFor="email-daily" className="font-medium text-slate-200">Daily Content Ready</Label>
-                <p className="text-sm text-slate-400">Get an email when new content is generated</p>
+                <p className="font-medium text-white">Email when content is ready</p>
+                <p className="text-sm text-slate-400">Daily generation updates.</p>
               </div>
-              <Switch
-                id="email-daily"
-                checked={notifications.emailDaily}
-                onCheckedChange={(checked) => setNotifications({ ...notifications, emailDaily: checked })}
-              />
+              <Switch checked={notifications.emailDaily} onCheckedChange={(value) => setNotifications((current) => ({ ...current, emailDaily: value }))} />
             </div>
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between rounded-xl border border-[#252A3A] bg-[#141720] p-4">
               <div>
-                <Label htmlFor="email-weekly" className="font-medium text-slate-200">Weekly Analytics</Label>
-                <p className="text-sm text-slate-400">Receive weekly performance summary</p>
+                <p className="font-medium text-white">Weekly digest</p>
+                <p className="text-sm text-slate-400">Summary of engagement and content output.</p>
               </div>
-              <Switch
-                id="email-weekly"
-                checked={notifications.emailWeekly}
-                onCheckedChange={(checked) => setNotifications({ ...notifications, emailWeekly: checked })}
-              />
+              <Switch checked={notifications.emailWeekly} onCheckedChange={(value) => setNotifications((current) => ({ ...current, emailWeekly: value }))} />
             </div>
-          </div>
-
-          <Button
-            onClick={handleSaveNotifications}
-            disabled={savingNotifications}
-            style={{ background: '#2563FF' }}
-            className="text-white hover:opacity-90"
-          >
-            {savingNotifications ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
-            Save Notification Settings
-          </Button>
-        </CardContent>
-      </Card>
-
-      {/* Posting Preferences */}
-      <Card style={cardStyle}>
-        <CardHeader>
-          <CardTitle className="flex items-center text-slate-100">
-            <Clock className="w-5 h-5 mr-2" />
-            Posting Preferences
-          </CardTitle>
-          <CardDescription className="text-slate-400">
-            Configure when and how your content is posted
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          <div className="grid sm:grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="posting-time" className="text-slate-200">Preferred Posting Time</Label>
-              <Input
-                id="posting-time"
-                type="time"
-                value={preferences.postingTime}
-                onChange={(e) => setPreferences({ ...preferences, postingTime: e.target.value })}
-                style={{ background: 'rgba(255,255,255,0.05)', borderColor: 'rgba(255,255,255,0.10)', color: '#F8FAFC' }}
-              />
-              <p className="text-sm text-slate-400">Content will be posted around this time</p>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="timezone" className="text-slate-200">Timezone</Label>
-              <select
-                id="timezone"
-                value={preferences.timezone}
-                onChange={(e) => setPreferences({ ...preferences, timezone: e.target.value })}
-                className="w-full rounded-lg px-3 py-2 text-sm"
-                style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.10)', color: '#F8FAFC' }}
-              >
-                <option value="America/New_York">Eastern Time (ET)</option>
-                <option value="America/Chicago">Central Time (CT)</option>
-                <option value="America/Denver">Mountain Time (MT)</option>
-                <option value="America/Los_Angeles">Pacific Time (PT)</option>
-                <option value="Europe/London">London (GMT)</option>
-                <option value="Europe/Paris">Paris (CET)</option>
-                <option value="Asia/Tokyo">Tokyo (JST)</option>
-                <option value="Australia/Sydney">Sydney (AEST)</option>
-                <option value="UTC">UTC</option>
-              </select>
-            </div>
-          </div>
-
-          <Button
-            onClick={handleSavePreferences}
-            disabled={savingPreferences}
-            style={{ background: '#2563FF' }}
-            className="text-white hover:opacity-90"
-          >
-            {savingPreferences ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
-            Save Preferences
-          </Button>
-        </CardContent>
-      </Card>
-
-      {/* Security */}
-      <Card style={cardStyle}>
-        <CardHeader>
-          <CardTitle className="flex items-center text-slate-100">
-            <Shield className="w-5 h-5 mr-2" />
-            Security
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex items-center justify-between p-4 rounded-lg" style={{ background: 'rgba(255,255,255,0.04)' }}>
-            <div>
-              <p className="font-medium text-slate-200">Two-Factor Authentication</p>
-              <p className="text-sm text-slate-400">Add an extra layer of security</p>
-            </div>
-            <Badge variant="outline" style={{ borderColor: 'rgba(255,255,255,0.15)', color: '#9AA3B8' }}>Coming Soon</Badge>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Connected Accounts */}
-      <Card style={cardStyle}>
-        <CardHeader>
-          <CardTitle className="flex items-center text-slate-100">
-            <User className="w-5 h-5 mr-2" />
-            Connected Accounts
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="flex items-center justify-between p-4 rounded-lg" style={{ background: 'rgba(255,255,255,0.04)' }}>
-            <div className="flex items-center">
-              <div
-                className="w-10 h-10 rounded-full flex items-center justify-center text-white font-semibold mr-3"
-                style={{ background: 'linear-gradient(135deg, #2563FF 0%, #22D3EE 100%)' }}
-              >
-                {user?.name?.[0]?.toUpperCase() ?? user?.email?.[0]?.toUpperCase() ?? '?'}
-              </div>
-              <div>
-                <p className="font-medium text-slate-200">
-                  {user?.email ?? 'Account'}
-                </p>
-                <p className="text-sm text-slate-400">AmarktAI Account</p>
-              </div>
-            </div>
-            <Badge style={{ background: 'rgba(16,185,129,0.15)', color: '#10B981', border: '1px solid rgba(16,185,129,0.3)' }}>Connected</Badge>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Automation Preferences */}
-      <Card style={cardStyle}>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-slate-100">
-            <Sparkles className="w-5 h-5" style={{ color: '#2563FF' }} />
-            Automation Preferences
-          </CardTitle>
-          <CardDescription className="text-slate-400">
-            Control automation behavior and organic vs. paid distribution strategy.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <Label className="font-medium text-slate-200">Auto-Post (Full Autonomy)</Label>
-              <p className="text-sm text-slate-400">
-                Posts approved content automatically without manual review
-              </p>
-            </div>
-            <Switch checked={autoPost} onCheckedChange={setAutoPost} />
-          </div>
-          <div className="flex items-center justify-between">
-            <div>
-              <Label className="font-medium text-slate-200">Auto-Reply to DMs &amp; Comments</Label>
-              <p className="text-sm text-slate-400">
-                Replies to incoming messages with tone-matched responses (TOS-compliant)
-              </p>
-            </div>
-            <Switch checked={autoReply} onCheckedChange={setAutoReply} />
-          </div>
-          <div className="flex items-center justify-between">
-            <div>
-              <Label className="font-medium text-slate-200">Organic Zero-Budget Mode</Label>
-              <p className="text-sm text-slate-400">
-                Default ON — use only free organic growth. Toggle OFF to enable paid boost connectors.
-              </p>
-            </div>
-            <Switch checked={organicMode} onCheckedChange={setOrganicMode} />
-          </div>
-          {!organicMode && (
-            <div className="p-3 rounded-lg text-sm" style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', color: '#FCD34D' }}>
-              Paid boost mode enabled. Connect your ad accounts in <strong>Integrations</strong> to use budget.
-            </div>
-          )}
-          <Button
-            onClick={handleSaveAutomation}
-            disabled={savingAutomation}
-            style={{ background: '#2563FF' }}
-            className="text-white hover:opacity-90"
-          >
-            {savingAutomation ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
-            Save Automation Settings
-          </Button>
-        </CardContent>
-      </Card>
-
-      {/* API Keys — managed in Integrations */}
-      <Card style={cardStyle}>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-slate-100">
-            <Key className="w-5 h-5" style={{ color: '#2563FF' }} />
-            API Keys &amp; Platform Connections
-          </CardTitle>
-          <CardDescription className="text-slate-400">
-            Manage your AI provider keys and social platform connections in one place.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Link to="/dashboard/integrations">
-            <Button style={{ background: '#2563FF' }} className="text-white hover:opacity-90">
-              <ExternalLink className="w-4 h-4 mr-2" />
-              Go to Integrations
+            <Button onClick={saveNotifications} disabled={savingNotifications} className="bg-blue-600 hover:bg-blue-500">
+              {savingNotifications ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Save notification settings
             </Button>
-          </Link>
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+
+        <Card className="border-[#252A3A] bg-[#0D0F14]">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-white"><Shield className="h-5 w-5 text-blue-300" />Danger zone</CardTitle>
+            <CardDescription>Status only. No fake destructive actions.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200">
+              <div className="flex items-center gap-2 font-medium">
+                <AlertTriangle className="h-4 w-4" />
+                Workspace deletion is not available from this beta settings screen.
+              </div>
+              <p className="mt-2 text-red-100/80">Use support or admin workflows for destructive actions until the product flow is hardened.</p>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }

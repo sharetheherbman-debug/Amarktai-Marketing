@@ -34,12 +34,29 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
   });
   if (!res.ok) {
-    const detail = await res.text().catch(() => res.statusText);
+    const raw = await res.text().catch(() => res.statusText);
+    let detail = raw;
+    try {
+      detail = toErrorMessage(JSON.parse(raw)) || raw;
+    } catch {
+      detail = raw;
+    }
     throw new Error(`API ${res.status}: ${detail}`);
   }
   // 204 No Content
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
+}
+
+function toErrorMessage(detail: unknown): string {
+  if (typeof detail === 'string' && detail.trim()) return detail;
+  if (detail && typeof detail === 'object' && 'detail' in detail) {
+    return toErrorMessage((detail as { detail?: unknown }).detail);
+  }
+  if (Array.isArray(detail)) {
+    return detail.map(toErrorMessage).filter(Boolean).join(', ');
+  }
+  return '';
 }
 
 /** Convert snake_case backend object to camelCase frontend type. */
@@ -142,6 +159,17 @@ export const webAppApi = {
     }
   },
 
+  analyze: async (payload: {
+    name?: string;
+    url?: string;
+    description?: string;
+  }): Promise<Record<string, unknown>> => {
+    return apiFetch('/webapps/analyze', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
   update: async (id: string, payload: Partial<WebApp>): Promise<WebApp> => {
     const body: Record<string, unknown> = {};
     if (payload.name !== undefined) body.name = payload.name;
@@ -189,6 +217,12 @@ export const webAppApi = {
       body: JSON.stringify(body),
     });
     return mapWebApp(data);
+  },
+
+  refreshIntelligence: async (id: string): Promise<{ ok: boolean; webapp_id: string; intelligence: Record<string, unknown> }> => {
+    return apiFetch(`/webapps/${id}/refresh-intelligence`, {
+      method: 'POST',
+    });
   },
 
   uploadMedia: async (webAppId: string, file: File): Promise<MediaAsset> => {
@@ -302,13 +336,59 @@ export const contentApi = {
     return mapContent(data);
   },
 
-  generate: async (webappId: string, platform: Platform): Promise<Content> => {
+  generate: async (
+    webappId: string,
+    platform: Platform,
+    options?: {
+      objective?: string;
+      tone?: string;
+      campaignType?: string;
+      productFocus?: string;
+      audience?: string;
+      includeHashtags?: boolean;
+      includeCta?: boolean;
+    }
+  ): Promise<Content> => {
+    const qs = new URLSearchParams({
+      webapp_id: webappId,
+      platform,
+    });
+    if (options?.objective) qs.set('objective', options.objective);
+    if (options?.tone) qs.set('tone', options.tone);
+    if (options?.campaignType) qs.set('campaign_type', options.campaignType);
+    if (options?.productFocus) qs.set('product_focus', options.productFocus);
+    if (options?.audience) qs.set('audience', options.audience);
+    if (options?.includeHashtags !== undefined) qs.set('include_hashtags', String(options.includeHashtags));
+    if (options?.includeCta !== undefined) qs.set('include_cta', String(options.includeCta));
     const data = await apiFetch<Record<string, unknown>>(
-      `/content/generate?webapp_id=${webappId}&platform=${platform}`,
+      `/content/generate?${qs.toString()}`,
       { method: 'POST' }
     );
     return mapContent(data);
   },
+
+  generateAll: async (payload: {
+    webappId: string;
+    platforms?: Platform[];
+  }): Promise<{
+    count: number;
+    items: Array<Record<string, unknown>>;
+    generator_summary: Record<string, unknown>;
+    warnings: string[];
+  }> => {
+    return apiFetch('/content/generate-all', {
+      method: 'POST',
+      body: JSON.stringify({
+        webapp_id: payload.webappId,
+        platforms: payload.platforms,
+      }),
+    });
+  },
+};
+
+export const settingsApi = {
+  getReadiness: async (): Promise<Record<string, unknown>> => apiFetch('/settings/readiness'),
+  getProviderResolution: async (): Promise<Record<string, unknown>> => apiFetch('/settings/provider-resolution'),
 };
 
 // ─── Analytics ───────────────────────────────────────────────────────────────

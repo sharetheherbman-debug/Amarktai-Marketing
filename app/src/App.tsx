@@ -20,7 +20,7 @@ const DashboardPage = lazy(() => import('@/app/dashboard/page'));
 const WebAppsPage = lazy(() => import('@/app/webapps/page'));
 const NewWebAppPage = lazy(() => import('@/app/webapps/new/page'));
 const EditWebAppPage = lazy(() => import('@/app/webapps/edit/page'));
-const PlatformsPage = lazy(() => import('@/app/platforms/page'));
+const BusinessDetailPage = lazy(() => import('@/app/businesses/detail/page'));
 const ContentPage = lazy(() => import('@/app/content/page'));
 const ApprovalPage = lazy(() => import('@/app/approval/page'));
 const SchedulerPage = lazy(() => import('@/app/scheduler/page'));
@@ -94,10 +94,13 @@ function AppRoutes() {
           }
         >
           <Route index element={<DashboardPage />} />
-          <Route path="webapps" element={<WebAppsPage />} />
-          <Route path="webapps/new" element={<NewWebAppPage />} />
+          <Route path="businesses" element={<WebAppsPage />} />
+          <Route path="businesses/new" element={<NewWebAppPage />} />
+          <Route path="businesses/:id" element={<BusinessDetailPage />} />
+          <Route path="webapps" element={<Navigate to="/dashboard/businesses" replace />} />
+          <Route path="webapps/new" element={<Navigate to="/dashboard/businesses/new" replace />} />
           <Route path="webapps/edit/:id" element={<EditWebAppPage />} />
-          <Route path="platforms" element={<PlatformsPage />} />
+          <Route path="webapps/:id" element={<BusinessDetailPage />} />
           <Route path="content" element={<ContentPage />} />
           <Route path="approval" element={<ApprovalPage />} />
           <Route path="scheduler" element={<SchedulerPage />} />

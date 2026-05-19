@@ -1,341 +1,237 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { motion } from 'framer-motion';
-import { ArrowLeft, Plus, X, Globe, Loader2, CheckCircle2, Sparkles } from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { AlertCircle, ArrowLeft, Building2, CheckCircle2, Loader2, Sparkles } from 'lucide-react';
+
 import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
-import { Badge } from '@/components/ui/badge';
 import { webAppApi } from '@/lib/api';
-import { toast } from 'sonner';
+import type { WebApp } from '@/types';
 
-const categories = [
-  'SaaS', 'E-commerce', 'Developer Tools', 'Productivity',
-  'Finance', 'Health & Fitness', 'Education', 'Entertainment', 'Other',
-];
+interface FormState {
+  name: string;
+  url: string;
+  description: string;
+  category: string;
+  targetAudience: string;
+}
 
-const fadeUp = {
-  hidden: { opacity: 0, y: 20 },
-  show: (i: number) => ({ opacity: 1, y: 0, transition: { delay: i * 0.06 } }),
-};
-
-type StepState = 'idle' | 'creating' | 'scraping' | 'done';
-
-export default function NewWebAppPage() {
+export default function NewBusinessPage() {
   const navigate = useNavigate();
-  const [step, setStep] = useState<StepState>('idle');
-  const [formData, setFormData] = useState({
+  const [form, setForm] = useState<FormState>({
     name: '',
     url: '',
     description: '',
     category: '',
     targetAudience: '',
-    keyFeatures: [''] as string[],
-    brandVoice: '',
-    marketLocation: '',
-    contentGoals: '',
-    scraperSourceUrls: [''] as string[],
   });
+  const [errors, setErrors] = useState<Partial<Record<keyof FormState | 'form', string>>>({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [createdBusiness, setCreatedBusiness] = useState<WebApp | null>(null);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!formData.name.trim() && !formData.url.trim()) {
-      toast.error('Please provide at least a business name or website URL.');
-      return;
+  const intelligence = useMemo(
+    () => ((createdBusiness?.scrapedData as Record<string, unknown> | null | undefined) ?? null),
+    [createdBusiness]
+  );
+
+  useEffect(() => {
+    if (!createdBusiness) return;
+    const timer = window.setTimeout(() => navigate(`/dashboard/businesses/${createdBusiness.id}`), 1800);
+    return () => window.clearTimeout(timer);
+  }, [createdBusiness, navigate]);
+
+  const validate = () => {
+    const nextErrors: Partial<Record<keyof FormState | 'form', string>> = {};
+    if (!form.name.trim() && !form.url.trim()) {
+      nextErrors.form = 'Enter at least a business name or a website URL.';
     }
-    setStep('creating');
+    if (form.url.trim() && !/^([a-z]+:\/\/)?[\w.-]+(?:\.[\w.-]+)+.*$/i.test(form.url.trim())) {
+      nextErrors.url = 'Enter a valid website URL or bare domain.';
+    }
+    setErrors(nextErrors);
+    return Object.keys(nextErrors).length === 0;
+  };
 
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!validate()) return;
+
+    setIsSubmitting(true);
     try {
-      await webAppApi.create({
-        ...formData,
-        keyFeatures: formData.keyFeatures.filter(f => f.trim() !== ''),
-        brandVoice: formData.brandVoice.trim() || undefined,
-        marketLocation: formData.marketLocation.trim() || undefined,
-        contentGoals: formData.contentGoals.trim() || undefined,
-        scraperSourceUrls: formData.scraperSourceUrls.filter(u => u.trim() !== '').length > 0
-          ? formData.scraperSourceUrls.filter(u => u.trim() !== '')
-          : undefined,
+      const business = await webAppApi.create({
+        name: form.name.trim(),
+        url: form.url.trim(),
+        description: form.description.trim(),
+        category: form.category.trim(),
+        targetAudience: form.targetAudience.trim(),
+        keyFeatures: [],
         isActive: true,
       });
-
-      // Show scraping state while backend auto-scrapes in background
-      setStep('scraping');
-      await new Promise(r => setTimeout(r, 1800)); // brief visual pause
-
-      setStep('done');
-      await new Promise(r => setTimeout(r, 900));
-
-      toast.success('Business added! AI is scanning your website for content insights.');
-      navigate('/dashboard/webapps');
+      setCreatedBusiness(business);
     } catch (error) {
-      setStep('idle');
-      toast.error('Failed to add web app');
+      setErrors({ form: error instanceof Error ? error.message : 'Failed to create business.' });
+      setIsSubmitting(false);
     }
   };
 
-  const addFeature = () => setFormData({ ...formData, keyFeatures: [...formData.keyFeatures, ''] });
-  const removeFeature = (index: number) =>
-    setFormData({ ...formData, keyFeatures: formData.keyFeatures.filter((_, i) => i !== index) });
-  const updateFeature = (index: number, value: string) => {
-    const next = [...formData.keyFeatures];
-    next[index] = value;
-    setFormData({ ...formData, keyFeatures: next });
-  };
-
-  const addScraperUrl = () => setFormData({ ...formData, scraperSourceUrls: [...formData.scraperSourceUrls, ''] });
-  const removeScraperUrl = (index: number) =>
-    setFormData({ ...formData, scraperSourceUrls: formData.scraperSourceUrls.filter((_, i) => i !== index) });
-  const updateScraperUrl = (index: number, value: string) => {
-    const next = [...formData.scraperSourceUrls];
-    next[index] = value;
-    setFormData({ ...formData, scraperSourceUrls: next });
-  };
-
-  const isSubmitting = step !== 'idle';
+  const warnings = ((intelligence?.warnings as string[] | undefined) ?? []).filter(Boolean);
+  const scrapeFailed = String(intelligence?.scrape_status || '') === 'failed';
 
   return (
-    <div className="max-w-2xl mx-auto">
-      <Button variant="ghost" className="mb-4" onClick={() => navigate('/dashboard/webapps')}>
-        <ArrowLeft className="w-4 h-4 mr-2" />
+    <div className="mx-auto max-w-3xl space-y-6">
+      <Link to="/dashboard/businesses" className="inline-flex items-center gap-2 text-sm text-slate-300 hover:text-white">
+        <ArrowLeft className="h-4 w-4" />
         Back to Businesses
-      </Button>
+      </Link>
 
-      {/* Step progress overlay */}
-      {isSubmitting && (
-        <motion.div
-          initial={{ opacity: 0, y: -12 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="mb-4"
-        >
-          <Card className={`border-2 ${step === 'done' ? 'border-green-400 bg-green-50' : 'border-violet-400 bg-violet-50'}`}>
-            <CardContent className="p-4 flex items-center gap-3">
-              {step === 'creating' && <Loader2 className="w-5 h-5 text-violet-600 animate-spin" />}
-              {step === 'scraping' && <Globe className="w-5 h-5 text-violet-600 animate-pulse" />}
-              {step === 'done' && <CheckCircle2 className="w-5 h-5 text-green-600" />}
-              <div>
-                <p className="font-medium text-sm">
-                  {step === 'creating' && 'Creating your business…'}
-                  {step === 'scraping' && 'AI is scanning your website for content insights…'}
-                  {step === 'done' && 'Done! Redirecting…'}
-                </p>
-                {step === 'scraping' && (
-                  <p className="text-xs text-gray-500 mt-0.5">
-                    Extracting headings, descriptions, and social links to fuel AI content generation
-                  </p>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        </motion.div>
-      )}
-
-      <Card>
+      <Card className="border-[#252A3A] bg-[#0D0F14]">
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Sparkles className="w-5 h-5 text-violet-600" />
-            Add New Business
+          <CardTitle className="flex items-center gap-2 text-white">
+            <Building2 className="h-5 w-5 text-blue-300" />
+            Add Business
           </CardTitle>
-          <p className="text-sm text-gray-500">
-            The AI will instantly scan your website and start generating platform-optimised content.
-          </p>
+          <CardDescription>Use a business name only, a website URL only, or both. Description, category, and audience are optional.</CardDescription>
         </CardHeader>
-        <CardContent>
-          <form onSubmit={handleSubmit} className="space-y-6">
-            <motion.div custom={0} variants={fadeUp} initial="hidden" animate="show" className="space-y-2">
-              <Label htmlFor="name">Business Name</Label>
-              <Input
-                id="name"
-                placeholder="e.g., TaskFlow Pro"
-                value={formData.name}
-                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                disabled={isSubmitting}
-              />
-            </motion.div>
+        <CardContent className="space-y-6">
+          {isSubmitting ? (
+            <div className="rounded-2xl border border-blue-500/30 bg-blue-500/10 p-4 text-blue-100">
+              <div className="flex items-center gap-3 font-medium">
+                <Loader2 className="h-5 w-5 animate-spin" />
+                Creating business and analyzing website…
+              </div>
+              <p className="mt-2 text-sm text-blue-100/80">If a website is provided, the scraper runs automatically. If it fails, the business still gets created.</p>
+            </div>
+          ) : null}
 
-            <motion.div custom={1} variants={fadeUp} initial="hidden" animate="show" className="space-y-2">
-              <Label htmlFor="url">Website URL</Label>
-              <Input
-                id="url"
-                type="url"
-                placeholder="https://yourapp.com"
-                value={formData.url}
-                onChange={(e) => setFormData({ ...formData, url: e.target.value })}
-                disabled={isSubmitting}
-              />
-              <p className="text-xs text-gray-500 flex items-center gap-1">
-                <Globe className="w-3 h-3" />
-                AI will auto-scrape this URL for brand copy, headings and social links
-              </p>
-            </motion.div>
+          {createdBusiness ? (
+            <div className={`rounded-2xl border p-5 ${scrapeFailed ? 'border-amber-500/30 bg-amber-500/10' : 'border-emerald-500/30 bg-emerald-500/10'}`}>
+              <div className="flex items-center gap-3 text-white">
+                {scrapeFailed ? <AlertCircle className="h-5 w-5 text-amber-300" /> : <CheckCircle2 className="h-5 w-5 text-emerald-300" />}
+                <div>
+                  <p className="font-semibold">{scrapeFailed ? 'Business created with analysis warnings' : 'Business created and analyzed'}</p>
+                  <p className="text-sm text-slate-300">Redirecting to the business detail page…</p>
+                </div>
+              </div>
 
-            <motion.div custom={2} variants={fadeUp} initial="hidden" animate="show" className="space-y-2">
-              <Label htmlFor="description">Description</Label>
+              {scrapeFailed ? (
+                <p className="mt-4 text-sm text-amber-100">Website analysis failed, but the business profile was created. Add a description or try refresh.</p>
+              ) : null}
+
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                <div className="rounded-xl border border-white/10 bg-black/10 p-3">
+                  <p className="text-xs uppercase tracking-wide text-slate-400">Summary</p>
+                  <p className="mt-2 text-sm text-white">{String(intelligence?.page_summary || createdBusiness.description || 'No summary extracted yet.')}</p>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-black/10 p-3">
+                  <p className="text-xs uppercase tracking-wide text-slate-400">Audience</p>
+                  <p className="mt-2 text-sm text-white">{String(intelligence?.target_audience_guess || createdBusiness.targetAudience || 'No audience extracted yet.')}</p>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-black/10 p-3">
+                  <p className="text-xs uppercase tracking-wide text-slate-400">Services</p>
+                  <p className="mt-2 text-sm text-white">{((intelligence?.products_services as string[] | undefined) ?? []).join(', ') || 'No services extracted yet.'}</p>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-black/10 p-3">
+                  <p className="text-xs uppercase tracking-wide text-slate-400">CTAs / Keywords</p>
+                  <p className="mt-2 text-sm text-white">
+                    {[
+                      ...(((intelligence?.ctas as string[] | undefined) ?? []).slice(0, 3)),
+                      ...(((intelligence?.keywords as string[] | undefined) ?? []).slice(0, 3)),
+                    ].join(', ') || 'No CTAs or keywords extracted yet.'}
+                  </p>
+                </div>
+              </div>
+
+              {warnings.length > 0 ? (
+                <ul className="mt-4 list-disc space-y-1 pl-5 text-xs text-slate-200">
+                  {warnings.map((warning) => (
+                    <li key={warning}>{warning}</li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+          ) : null}
+
+          {errors.form ? (
+            <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">{errors.form}</div>
+          ) : null}
+
+          <form onSubmit={handleSubmit} className="space-y-5">
+            <div className="grid gap-5 md:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="name" className="text-slate-200">Business name</Label>
+                <Input
+                  id="name"
+                  value={form.name}
+                  onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
+                  placeholder="Acme Bakery"
+                  className="border-[#252A3A] bg-[#141720] text-white"
+                  disabled={isSubmitting || Boolean(createdBusiness)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="url" className="text-slate-200">Website URL</Label>
+                <Input
+                  id="url"
+                  value={form.url}
+                  onChange={(event) => setForm((current) => ({ ...current, url: event.target.value }))}
+                  placeholder="acmebakery.com"
+                  className="border-[#252A3A] bg-[#141720] text-white"
+                  disabled={isSubmitting || Boolean(createdBusiness)}
+                />
+                {errors.url ? <p className="text-xs text-red-300">{errors.url}</p> : <p className="text-xs text-slate-500">Bare domains are normalized to https:// automatically.</p>}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="description" className="text-slate-200">Short description</Label>
               <Textarea
                 id="description"
-                placeholder="What does your business do? What problem does it solve?"
-                value={formData.description}
-                onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                rows={3}
-                disabled={isSubmitting}
+                value={form.description}
+                onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))}
+                placeholder="Optional context about the business, offer, or differentiators"
+                className="min-h-[110px] border-[#252A3A] bg-[#141720] text-white"
+                disabled={isSubmitting || Boolean(createdBusiness)}
               />
-            </motion.div>
+            </div>
 
-            <motion.div custom={3} variants={fadeUp} initial="hidden" animate="show" className="space-y-2">
-              <Label>Category *</Label>
-              <div className="flex flex-wrap gap-2">
-                {categories.map((cat) => (
-                  <Badge
-                    key={cat}
-                    variant={formData.category === cat ? 'default' : 'outline'}
-                    className={`cursor-pointer ${
-                      formData.category === cat
-                        ? 'bg-violet-600 hover:bg-violet-700'
-                        : 'hover:bg-gray-100'
-                    }`}
-                    onClick={() => !isSubmitting && setFormData({ ...formData, category: cat })}
-                  >
-                    {cat}
-                  </Badge>
-                ))}
-              </div>
-            </motion.div>
-
-            <motion.div custom={4} variants={fadeUp} initial="hidden" animate="show" className="space-y-2">
-              <Label htmlFor="targetAudience">Target Audience</Label>
-              <Input
-                id="targetAudience"
-                placeholder="e.g., Remote teams, project managers, startups"
-                value={formData.targetAudience}
-                onChange={(e) => setFormData({ ...formData, targetAudience: e.target.value })}
-                disabled={isSubmitting}
-              />
-            </motion.div>
-
-            <motion.div custom={5} variants={fadeUp} initial="hidden" animate="show" className="space-y-2">
-              <Label>Key Features</Label>
-              <p className="text-sm text-gray-500 mb-2">
-                Add features that make your business stand out — helps AI create better content.
-              </p>
+            <div className="grid gap-5 md:grid-cols-2">
               <div className="space-y-2">
-                {formData.keyFeatures.map((feature, index) => (
-                  <div key={index} className="flex items-center space-x-2">
-                    <Input
-                      placeholder={`Feature ${index + 1}`}
-                      value={feature}
-                      onChange={(e) => updateFeature(index, e.target.value)}
-                      disabled={isSubmitting}
-                    />
-                    {formData.keyFeatures.length > 1 && (
-                      <Button type="button" variant="ghost" size="icon" onClick={() => removeFeature(index)}>
-                        <X className="w-4 h-4" />
-                      </Button>
-                    )}
-                  </div>
-                ))}
+                <Label htmlFor="category" className="text-slate-200">Category</Label>
+                <Input
+                  id="category"
+                  value={form.category}
+                  onChange={(event) => setForm((current) => ({ ...current, category: event.target.value }))}
+                  placeholder="Retail, SaaS, Services"
+                  className="border-[#252A3A] bg-[#141720] text-white"
+                  disabled={isSubmitting || Boolean(createdBusiness)}
+                />
               </div>
-              <Button type="button" variant="outline" size="sm" onClick={addFeature} disabled={isSubmitting}>
-                <Plus className="w-4 h-4 mr-2" />
-                Add Feature
-              </Button>
-            </motion.div>
-
-            <motion.div custom={6} variants={fadeUp} initial="hidden" animate="show" className="space-y-2">
-              <Label htmlFor="brandVoice">Brand Voice &amp; Tone</Label>
-              <Textarea
-                id="brandVoice"
-                placeholder="Describe your brand's voice and tone. e.g. 'Professional yet approachable, uses plain language, avoids jargon, energetic and motivating.'"
-                value={formData.brandVoice}
-                onChange={(e) => setFormData({ ...formData, brandVoice: e.target.value })}
-                rows={3}
-                disabled={isSubmitting}
-              />
-              <p className="text-xs text-gray-500">
-                This guides AI content generation to match your brand personality.
-              </p>
-            </motion.div>
-
-            <motion.div custom={7} variants={fadeUp} initial="hidden" animate="show" className="space-y-2">
-              <Label htmlFor="marketLocation">Market / Location</Label>
-              <Input
-                id="marketLocation"
-                placeholder="e.g., United Kingdom, Global, US - New York"
-                value={formData.marketLocation}
-                onChange={(e) => setFormData({ ...formData, marketLocation: e.target.value })}
-                disabled={isSubmitting}
-              />
-              <p className="text-xs text-gray-500">
-                The geographic market or region you are targeting.
-              </p>
-            </motion.div>
-
-            <motion.div custom={8} variants={fadeUp} initial="hidden" animate="show" className="space-y-2">
-              <Label htmlFor="contentGoals">Content Goals</Label>
-              <Textarea
-                id="contentGoals"
-                placeholder="e.g., Drive app signups, build brand awareness, grow newsletter subscribers"
-                value={formData.contentGoals}
-                onChange={(e) => setFormData({ ...formData, contentGoals: e.target.value })}
-                rows={3}
-                disabled={isSubmitting}
-              />
-              <p className="text-xs text-gray-500">
-                What do you want your content to achieve? This shapes AI generation priorities.
-              </p>
-            </motion.div>
-
-            <motion.div custom={9} variants={fadeUp} initial="hidden" animate="show" className="space-y-2">
-              <Label>Additional Scraper Source URLs</Label>
-              <p className="text-sm text-gray-500 mb-2">
-                Add extra pages to scrape (e.g. product pages, pricing, about). The main URL above is always scraped automatically.
-              </p>
               <div className="space-y-2">
-                {formData.scraperSourceUrls.map((url, index) => (
-                  <div key={index} className="flex items-center space-x-2">
-                    <Input
-                      type="url"
-                      placeholder={`https://yourapp.com/page-${index + 1}`}
-                      value={url}
-                      onChange={(e) => updateScraperUrl(index, e.target.value)}
-                      disabled={isSubmitting}
-                    />
-                    {formData.scraperSourceUrls.length > 1 && (
-                      <Button type="button" variant="ghost" size="icon" onClick={() => removeScraperUrl(index)} disabled={isSubmitting}>
-                        <X className="w-4 h-4" />
-                      </Button>
-                    )}
-                  </div>
-                ))}
+                <Label htmlFor="targetAudience" className="text-slate-200">Target audience</Label>
+                <Input
+                  id="targetAudience"
+                  value={form.targetAudience}
+                  onChange={(event) => setForm((current) => ({ ...current, targetAudience: event.target.value }))}
+                  placeholder="Local shoppers, B2B buyers, founders"
+                  className="border-[#252A3A] bg-[#141720] text-white"
+                  disabled={isSubmitting || Boolean(createdBusiness)}
+                />
               </div>
-              <Button type="button" variant="outline" size="sm" onClick={addScraperUrl} disabled={isSubmitting}>
-                <Plus className="w-4 h-4 mr-2" />
-                Add URL
-              </Button>
-            </motion.div>
+            </div>
 
-            <motion.div custom={10} variants={fadeUp} initial="hidden" animate="show" className="flex items-center justify-end space-x-4 pt-4">
-              <Button type="button" variant="outline" onClick={() => navigate('/dashboard/webapps')} disabled={isSubmitting}>
-                Cancel
+            <div className="flex flex-wrap justify-end gap-3">
+              <Link to="/dashboard/businesses">
+                <Button type="button" variant="outline" className="border-[#252A3A] bg-transparent text-slate-200 hover:bg-white/5">
+                  Cancel
+                </Button>
+              </Link>
+              <Button type="submit" disabled={isSubmitting || Boolean(createdBusiness)} className="bg-blue-600 hover:bg-blue-500">
+                <Sparkles className="mr-2 h-4 w-4" />
+                Add Business
               </Button>
-              <Button
-                type="submit"
-                className="bg-gradient-to-r from-violet-600 to-indigo-600"
-                disabled={isSubmitting}
-              >
-                {isSubmitting ? (
-                  <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    {step === 'creating' ? 'Creating…' : step === 'scraping' ? 'AI Scanning…' : 'Done!'}
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="w-4 h-4 mr-2" />
-                    Add Business & Start AI
-                  </>
-                )}
-              </Button>
-            </motion.div>
+            </div>
           </form>
         </CardContent>
       </Card>

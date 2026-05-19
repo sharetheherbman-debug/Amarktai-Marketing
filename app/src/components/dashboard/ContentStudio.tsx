@@ -1,482 +1,334 @@
-import { useEffect, useState } from 'react';
-import { 
-  Wand2, 
-  Image, 
-  Video, 
-  Type, 
-  Mic,
-  Sparkles,
-  Download,
-  Copy,
-  RefreshCw,
-  Palette,
-  Music,
-  Subtitles,
-  Settings,
-  Scissors,
-  Layers,
-  AlertTriangle
-} from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { AlertCircle, Copy, Loader2, PenTool, Save, Send, Sparkles } from 'lucide-react';
+import { toast } from 'sonner';
+
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
-import { Slider } from '@/components/ui/slider';
-import { Switch } from '@/components/ui/switch';
-import { motion, AnimatePresence } from 'framer-motion';
-import { containerVariants, itemVariants } from '@/lib/motion';
 import { contentApi, webAppApi } from '@/lib/api';
-import type { Platform, WebApp } from '@/types';
+import type { Content, Platform, WebApp } from '@/types';
 
-interface GeneratedAsset {
-  id: string;
-  type: 'image' | 'video' | 'audio' | 'text';
-  url?: string;
-  content?: string;
-  prompt: string;
-  status: 'generating' | 'completed' | 'error';
-  title?: string;
-  caption?: string;
-  errorMessage?: string;
-  generationStatus?: string;
-  generationMessage?: string;
-}
+const platforms: Array<{ id: Platform; label: string }> = [
+  { id: 'instagram', label: 'Instagram' },
+  { id: 'facebook', label: 'Facebook' },
+  { id: 'linkedin', label: 'LinkedIn' },
+  { id: 'twitter', label: 'X / Twitter' },
+  { id: 'tiktok', label: 'TikTok' },
+  { id: 'youtube', label: 'YouTube' },
+  { id: 'reddit', label: 'Reddit' },
+  { id: 'pinterest', label: 'Pinterest' },
+];
 
-export function ContentStudio() {
-  const [prompt, setPrompt] = useState('');
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [generatedAssets, setGeneratedAssets] = useState<GeneratedAsset[]>([]);
-  const [selectedStyle, setSelectedStyle] = useState('modern');
-  const [intensity, setIntensity] = useState([50]);
-  const [selectedPlatform, setSelectedPlatform] = useState<Platform>('instagram');
-  const [webappId, setWebappId] = useState('');
-  const [webapps, setWebapps] = useState<WebApp[]>([]);
-  const [webappLoadError, setWebappLoadError] = useState('');
+export function ContentStudio({
+  initialBusinessId,
+  onGenerated,
+}: {
+  initialBusinessId?: string;
+  onGenerated?: (items: Content[]) => void;
+}) {
+  const [businesses, setBusinesses] = useState<WebApp[]>([]);
+  const [businessId, setBusinessId] = useState(initialBusinessId ?? '');
+  const [platform, setPlatform] = useState<Platform>('instagram');
+  const [objective, setObjective] = useState('');
+  const [tone, setTone] = useState('');
+  const [audience, setAudience] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [busyAction, setBusyAction] = useState<'single' | 'all' | null>(null);
+  const [apiError, setApiError] = useState<string>('');
+  const [generated, setGenerated] = useState<Content[]>([]);
 
   useEffect(() => {
-    const loadWebapps = async () => {
+    const loadBusinesses = async () => {
       try {
-        const data = await webAppApi.getAll();
-        setWebapps(data);
-        if (data.length > 0) {
-          setWebappId(data[0].id);
-          setWebappLoadError('');
-        } else {
-          setWebappLoadError('Create a business profile first to generate content.');
+        const items = await webAppApi.getAll();
+        setBusinesses(items);
+        if (!businessId && items.length > 0) {
+          setBusinessId(initialBusinessId && items.some((item) => item.id === initialBusinessId) ? initialBusinessId : items[0].id);
         }
-      } catch {
-        setWebappLoadError('Failed to load business profiles.');
+      } catch (error) {
+        setApiError(error instanceof Error ? error.message : 'Failed to load businesses.');
+      } finally {
+        setLoading(false);
       }
     };
-    loadWebapps();
-  }, []);
+    void loadBusinesses();
+  }, [initialBusinessId]);
 
-  const styles = [
-    { id: 'modern', name: 'Modern', icon: Palette, color: 'from-blue-500 to-cyan-500' },
-    { id: 'vintage', name: 'Vintage', icon: Image, color: 'from-amber-500 to-orange-500' },
-    { id: 'minimal', name: 'Minimal', icon: Layers, color: 'from-slate-500 to-gray-500' },
-    { id: 'bold', name: 'Bold', icon: Sparkles, color: 'from-purple-500 to-pink-500' },
-    { id: 'corporate', name: 'Corporate', icon: Type, color: 'from-emerald-500 to-teal-500' },
-  ];
-
-  const platforms: { id: Platform; label: string }[] = [
-    { id: 'instagram', label: 'Instagram' },
-    { id: 'tiktok', label: 'TikTok' },
-    { id: 'twitter', label: 'Twitter' },
-    { id: 'facebook', label: 'Facebook' },
-    { id: 'youtube', label: 'YouTube' },
-    { id: 'linkedin', label: 'LinkedIn' },
-  ];
+  const selectedBusiness = useMemo(() => businesses.find((item) => item.id === businessId) ?? null, [businessId, businesses]);
 
   const handleGenerate = async () => {
-    if (!prompt.trim()) return;
-    if (!webappId) {
-      setGeneratedAssets(prev => [{
-        id: Date.now().toString(),
-        type: 'text',
-        prompt,
-        status: 'error',
-        errorMessage: 'No business profile selected. Create/select a business first.',
-      }, ...prev]);
+    if (!businessId) {
+      setApiError('Add or select a business before generating content.');
       return;
     }
-    
-    setIsGenerating(true);
-    
-    const newAsset: GeneratedAsset = {
-      id: Date.now().toString(),
-      type: 'text',
-      prompt,
-      status: 'generating'
-    };
-    
-    setGeneratedAssets(prev => [newAsset, ...prev]);
 
+    setBusyAction('single');
+    setApiError('');
     try {
-      const result = await contentApi.generate(webappId, selectedPlatform);
-      setGeneratedAssets(prev =>
-        prev.map(asset =>
-          asset.id === newAsset.id
-            ? {
-                ...asset,
-                status: 'completed' as const,
-                content: result.caption,
-                title: result.title,
-                caption: result.caption,
-                generationStatus: String(result.generationMetadata?.generation_status || "configured"),
-                generationMessage: typeof result.generationMetadata?.message === "string" ? result.generationMetadata?.message : undefined,
-              }
-            : asset
-        )
-      );
-    } catch (err) {
-      setGeneratedAssets(prev =>
-        prev.map(asset =>
-          asset.id === newAsset.id
-            ? {
-                ...asset,
-                status: 'error' as const,
-                errorMessage: err instanceof Error ? err.message : 'Generation failed',
-              }
-            : asset
-        )
-      );
+      const item = await contentApi.generate(businessId, platform, {
+        objective: objective.trim() || undefined,
+        tone: tone.trim() || undefined,
+        audience: audience.trim() || undefined,
+      });
+      const next = [item, ...generated].slice(0, 8);
+      setGenerated(next);
+      onGenerated?.([item]);
+      toast.success(`${platform} draft created.`);
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : 'Generation failed.');
     } finally {
-      setIsGenerating(false);
+      setBusyAction(null);
     }
   };
 
+  const handleGenerateAll = async () => {
+    if (!businessId) {
+      setApiError('Add or select a business before generating content.');
+      return;
+    }
+
+    setBusyAction('all');
+    setApiError('');
+    try {
+      const batch = await contentApi.generateAll({ webappId: businessId });
+      const items = batch.items.filter((item): item is Record<string, unknown> => !('error' in item));
+      const loadedItems = await Promise.all(
+        items
+          .map((item) => String(item.id || ''))
+          .filter(Boolean)
+          .map((id) => contentApi.getById(id))
+      );
+      const next = loadedItems.filter((item): item is Content => Boolean(item));
+      setGenerated((current) => [...next, ...current].slice(0, 12));
+      onGenerated?.(next);
+      toast.success(batch.warnings?.[0] ? `Generated with warnings: ${batch.warnings[0]}` : `Generated ${next.length} platform drafts.`);
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : 'Generate all failed.');
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex min-h-[240px] items-center justify-center rounded-2xl border border-[#252A3A] bg-[#0D0F14]">
+        <Loader2 className="h-8 w-8 animate-spin text-blue-400" />
+      </div>
+    );
+  }
+
+  if (businesses.length === 0) {
+    return (
+      <Card className="border-dashed border-blue-500/30 bg-[#0D0F14]">
+        <CardContent className="flex flex-col items-start gap-4 p-8">
+          <div className="rounded-2xl bg-blue-500/15 p-3 text-blue-300">
+            <PenTool className="h-6 w-6" />
+          </div>
+          <div>
+            <h3 className="text-xl font-semibold text-white">Add Business</h3>
+            <p className="mt-2 text-sm text-slate-400">Content Studio needs a real business profile before generation controls become available.</p>
+          </div>
+          <Link to="/dashboard/businesses/new">
+            <Button className="bg-blue-600 hover:bg-blue-500">Add Business</Button>
+          </Link>
+        </CardContent>
+      </Card>
+    );
+  }
+
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <motion.div 
-        variants={containerVariants}
-        initial="hidden"
-        animate="visible"
-        className="grid grid-cols-1 md:grid-cols-4 gap-4"
-      >
-        {[
-          { icon: Image, label: 'Images Generated', value: '1,247', color: 'text-pink-400', bg: 'bg-pink-500/20' },
-          { icon: Video, label: 'Videos Created', value: '89', color: 'text-purple-400', bg: 'bg-purple-500/20' },
-          { icon: Mic, label: 'Voiceovers', value: '234', color: 'text-blue-400', bg: 'bg-blue-500/20' },
-          { icon: Type, label: 'Captions', value: '3,456', color: 'text-green-400', bg: 'bg-green-500/20' },
-        ].map((stat, i) => (
-          <motion.div key={i} variants={itemVariants}>
-            <Card className="bg-gradient-to-br from-slate-900 to-slate-800 border-slate-700/50">
-              <CardContent className="p-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-slate-400 text-sm">{stat.label}</p>
-                    <p className={`text-2xl font-bold ${stat.color}`}>{stat.value}</p>
-                  </div>
-                  <div className={`p-3 rounded-xl ${stat.bg}`}>
-                    <stat.icon className={`w-5 h-5 ${stat.color}`} />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </motion.div>
-        ))}
-      </motion.div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Generation Panel */}
-        <motion.div 
-          initial={{ opacity: 0, x: -20 }}
-          animate={{ opacity: 1, x: 0 }}
-          className="lg:col-span-2 space-y-4"
-        >
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800 border-slate-700/50">
-            <CardHeader>
-              <CardTitle className="text-lg flex items-center gap-2">
-                <Wand2 className="w-5 h-5 text-purple-400" />
-                AI Content Generator
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {/* Prompt Input */}
-              <div className="space-y-2">
-                <label className="text-sm text-slate-400">What would you like to create?</label>
-                <Textarea
-                  placeholder="Describe your content idea... (e.g., 'A modern tech product showcase with blue gradients and floating elements')"
-                  value={prompt}
-                  onChange={(e) => setPrompt(e.target.value)}
-                  className="min-h-[100px] bg-slate-800/50 border-slate-700 resize-none"
-                />
+      <Card className="border-[#252A3A] bg-[#0D0F14]">
+        <CardHeader>
+          <CardTitle>Generate content</CardTitle>
+          <CardDescription>Generation works from the business profile even without social OAuth. OAuth is only for posting later.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-5">
+          {apiError ? (
+            <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">
+              <div className="flex items-center gap-2 font-medium">
+                <AlertCircle className="h-4 w-4" />
+                API error
               </div>
+              <p className="mt-2">{apiError}</p>
+            </div>
+          ) : null}
 
-              {/* Platform Selection */}
-              <div className="space-y-2">
-                <label className="text-sm text-slate-400">Target Platform</label>
-                <div className="flex flex-wrap gap-2">
-                  {platforms.map((p) => (
-                    <button
-                      key={p.id}
-                      onClick={() => setSelectedPlatform(p.id)}
-                      className={`px-3 py-1.5 rounded-lg text-sm transition-all ${
-                        selectedPlatform === p.id
-                          ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30'
-                          : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 border border-slate-700/50'
-                      }`}
-                    >
-                      {p.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-sm text-slate-400">Business Profile</label>
-                <select
-                  value={webappId}
-                  onChange={(e) => setWebappId(e.target.value)}
-                  className="w-full rounded-md border border-slate-700 bg-slate-800/50 px-3 py-2 text-sm text-slate-200"
-                >
-                  {webapps.map((w) => (
-                    <option key={w.id} value={w.id}>
-                      {w.name || w.url || w.id}
-                    </option>
-                  ))}
-                </select>
-                {webappLoadError ? <p className="text-xs text-amber-300">{webappLoadError}</p> : null}
-              </div>
-
-              {/* Style Selection */}
-              <div className="space-y-2">
-                <label className="text-sm text-slate-400">Visual Style</label>
-                <div className="flex flex-wrap gap-2">
-                  {styles.map((style) => (
-                    <motion.button
-                      key={style.id}
-                      whileHover={{ scale: 1.05 }}
-                      whileTap={{ scale: 0.95 }}
-                      onClick={() => setSelectedStyle(style.id)}
-                      className={`flex items-center gap-2 px-4 py-2 rounded-lg border transition-all ${
-                        selectedStyle === style.id
-                          ? `bg-gradient-to-r ${style.color} border-transparent text-white`
-                          : 'bg-slate-800/50 border-slate-700 text-slate-400 hover:border-slate-600'
-                      }`}
-                    >
-                      <style.icon className="w-4 h-4" />
-                      {style.name}
-                    </motion.button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Settings */}
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <label className="text-sm text-slate-400 flex items-center justify-between">
-                    Creativity Level
-                    <span className="text-slate-300">{intensity[0]}%</span>
-                  </label>
-                  <Slider 
-                    value={intensity} 
-                    onValueChange={setIntensity}
-                    max={100}
-                    step={10}
-                    className="w-full"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <label className="text-sm text-slate-400">Options</label>
-                  <div className="flex gap-4">
-                    <div className="flex items-center gap-2">
-                      <Switch id="hd" defaultChecked className="data-[state=checked]:bg-purple-500" />
-                      <label htmlFor="hd" className="text-sm text-slate-300">HD Quality</label>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Switch id="watermark" className="data-[state=checked]:bg-purple-500" />
-                      <label htmlFor="watermark" className="text-sm text-slate-300">No Watermark</label>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Generate Button */}
-              <Button 
-                onClick={handleGenerate}
-                disabled={isGenerating || !prompt.trim()}
-                className="w-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700"
+          <div className="grid gap-5 lg:grid-cols-2">
+            <div className="space-y-2">
+              <Label className="text-slate-200">Business</Label>
+              <select
+                value={businessId}
+                onChange={(event) => setBusinessId(event.target.value)}
+                className="w-full rounded-xl border border-[#252A3A] bg-[#141720] px-3 py-2.5 text-sm text-white"
               >
-                {isGenerating ? (
-                  <>
-                    <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
-                    Generating...
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="w-4 h-4 mr-2" />
-                    Generate Content
-                  </>
-                )}
-              </Button>
+                {businesses.map((business) => (
+                  <option key={business.id} value={business.id}>
+                    {business.name || business.url || business.id}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-2">
+              <Label className="text-slate-200">Platform</Label>
+              <select
+                value={platform}
+                onChange={(event) => setPlatform(event.target.value as Platform)}
+                className="w-full rounded-xl border border-[#252A3A] bg-[#141720] px-3 py-2.5 text-sm text-white"
+              >
+                {platforms.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="objective" className="text-slate-200">Objective</Label>
+              <Input
+                id="objective"
+                value={objective}
+                onChange={(event) => setObjective(event.target.value)}
+                placeholder="Drive leads, book demos, grow awareness"
+                className="border-[#252A3A] bg-[#141720] text-white"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="tone" className="text-slate-200">Tone</Label>
+              <Input
+                id="tone"
+                value={tone}
+                onChange={(event) => setTone(event.target.value)}
+                placeholder="Confident, friendly, premium"
+                className="border-[#252A3A] bg-[#141720] text-white"
+              />
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="audience" className="text-slate-200">Audience override</Label>
+            <Textarea
+              id="audience"
+              value={audience}
+              onChange={(event) => setAudience(event.target.value)}
+              placeholder="Optional audience context for this campaign"
+              className="min-h-[100px] border-[#252A3A] bg-[#141720] text-white"
+            />
+          </div>
+
+          <div className="rounded-xl border border-[#252A3A] bg-[#141720] p-4 text-sm text-slate-300">
+            <p className="font-medium text-white">Selected business</p>
+            <p className="mt-1">{selectedBusiness?.name || 'Business profile'}</p>
+            <p className="mt-2 text-slate-400">{selectedBusiness?.description || 'No description yet. Website analysis or manual notes will improve generation.'}</p>
+          </div>
+
+          <div className="flex flex-wrap gap-3">
+            <Button onClick={handleGenerate} disabled={busyAction !== null} className="bg-blue-600 hover:bg-blue-500">
+              {busyAction === 'single' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
+              Generate Content
+            </Button>
+            <Button
+              variant="outline"
+              onClick={handleGenerateAll}
+              disabled={busyAction !== null}
+              className="border-[#252A3A] bg-transparent text-slate-200 hover:bg-white/5"
+            >
+              {busyAction === 'all' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
+              Generate All Platforms
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        {generated.length === 0 ? (
+          <Card className="border-dashed border-[#252A3A] bg-[#0D0F14] xl:col-span-2">
+            <CardContent className="p-6 text-sm text-slate-400">
+              Generated output will show platform, caption/body, CTA, hashtags, generation status, degraded warnings, scrape source, and quick actions.
             </CardContent>
           </Card>
-
-          {/* Recent Generations */}
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800 border-slate-700/50">
-            <CardHeader>
-              <CardTitle className="text-lg">Recent Generations</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <AnimatePresence>
-                  {generatedAssets.map((asset) => (
-                    <motion.div
-                      key={asset.id}
-                      initial={{ opacity: 0, scale: 0.9 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      exit={{ opacity: 0, scale: 0.9 }}
-                      className="relative group"
-                    >
-                      <div className="p-4 bg-slate-800 rounded-lg overflow-hidden min-h-[120px]">
-                        {asset.status === 'generating' ? (
-                          <div className="w-full h-full flex items-center justify-center">
-                            <div className="text-center">
-                              <RefreshCw className="w-8 h-8 text-purple-400 animate-spin mx-auto mb-2" />
-                              <p className="text-sm text-slate-400">Generating...</p>
-                            </div>
-                          </div>
-                        ) : asset.status === 'error' ? (
-                          <div className="w-full h-full flex items-center justify-center">
-                            <div className="text-center">
-                              <AlertTriangle className="w-8 h-8 text-yellow-400 mx-auto mb-2" />
-                              <p className="text-sm text-red-400">{asset.errorMessage || 'Generation failed'}</p>
-                            </div>
-                          </div>
-                        ) : (
-                          <div>
-                            {asset.title && (
-                              <h4 className="font-medium text-slate-200 mb-2">{asset.title}</h4>
-                            )}
-                            <p className="text-sm text-slate-300 line-clamp-4">{asset.caption || asset.content}</p>
-                            {asset.generationStatus && asset.generationStatus !== 'genx_success' && (
-                              <p className="text-xs text-amber-300 mt-2">{asset.generationMessage || 'Output is degraded. Review before posting.'}</p>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                      
-                      {asset.status === 'completed' && (
-                        <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity rounded-lg flex items-center justify-center gap-2">
-                          <Button size="sm" variant="secondary">
-                            <Download className="w-4 h-4" />
-                          </Button>
-                          <Button size="sm" variant="secondary">
-                            <Copy className="w-4 h-4" />
-                          </Button>
-                        </div>
-                      )}
-                    </motion.div>
-                  ))}
-                </AnimatePresence>
-
-                {/* Placeholder */}
-                {generatedAssets.length === 0 && (
-                  <div className="aspect-video bg-slate-800/50 rounded-lg border-2 border-dashed border-slate-700 flex items-center justify-center">
-                    <p className="text-slate-500 text-sm">Your generations will appear here</p>
-                  </div>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        </motion.div>
-
-        {/* Tools Panel */}
-        <motion.div 
-          initial={{ opacity: 0, x: 20 }}
-          animate={{ opacity: 1, x: 0 }}
-          className="space-y-4"
-        >
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800 border-slate-700/50">
-            <CardHeader>
-              <CardTitle className="text-lg flex items-center gap-2">
-                <Settings className="w-5 h-5 text-blue-400" />
-                Quick Tools
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {[
-                { icon: Type, name: 'Caption Generator', desc: 'AI-powered captions', color: 'text-green-400', bg: 'bg-green-500/20' },
-                { icon: Subtitles, name: 'Subtitle Creator', desc: 'Auto-generate subtitles', color: 'text-yellow-400', bg: 'bg-yellow-500/20' },
-                { icon: Music, name: 'Background Music', desc: 'Royalty-free tracks', color: 'text-pink-400', bg: 'bg-pink-500/20' },
-                { icon: Scissors, name: 'Video Trimmer', desc: 'Quick video edits', color: 'text-purple-400', bg: 'bg-purple-500/20' },
-                { icon: Mic, name: 'Voice Over', desc: 'AI voice synthesis', color: 'text-blue-400', bg: 'bg-blue-500/20' },
-              ].map((tool) => (
-                <motion.button
-                  key={tool.name}
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.98 }}
-                  className="w-full flex items-center gap-3 p-3 bg-slate-800/50 rounded-lg hover:bg-slate-800 transition-colors text-left"
-                >
-                  <div className={`p-2 rounded-lg ${tool.bg}`}>
-                    <tool.icon className={`w-5 h-5 ${tool.color}`} />
-                  </div>
-                  <div className="flex-1">
-                    <p className="font-medium text-slate-200 text-sm">{tool.name}</p>
-                    <p className="text-xs text-slate-400">{tool.desc}</p>
-                  </div>
-                </motion.button>
-              ))}
-            </CardContent>
-          </Card>
-
-          {/* Templates */}
-          <Card className="bg-gradient-to-br from-slate-900 to-slate-800 border-slate-700/50">
-            <CardHeader>
-              <CardTitle className="text-lg">Popular Templates</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {[
-                { name: 'Product Showcase', uses: '2.4K uses', image: 'https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=200&h=120&fit=crop' },
-                { name: 'Testimonial Video', uses: '1.8K uses', image: 'https://images.unsplash.com/photo-1551836022-d5d88e9218df?w=200&h=120&fit=crop' },
-                { name: 'Announcement Post', uses: '3.2K uses', image: 'https://images.unsplash.com/photo-1557804506-669a67965ba0?w=200&h=120&fit=crop' },
-              ].map((template) => (
-                <motion.div
-                  key={template.name}
-                  whileHover={{ scale: 1.02 }}
-                  className="relative overflow-hidden rounded-lg cursor-pointer group"
-                >
-                  <img 
-                    src={template.image} 
-                    alt={template.name}
-                    className="w-full h-20 object-cover"
-                  />
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent flex items-end p-3">
+        ) : (
+          generated.map((item) => {
+            const metadata = (item.generationMetadata as Record<string, unknown> | undefined) ?? {};
+            const hashtags = Array.isArray(metadata.hashtags) && metadata.hashtags.length > 0 ? (metadata.hashtags as string[]) : item.hashtags;
+            const degraded = Boolean(metadata.degraded);
+            return (
+              <Card key={item.id} className="border-[#252A3A] bg-[#0D0F14]">
+                <CardHeader>
+                  <div className="flex items-start justify-between gap-4">
                     <div>
-                      <p className="font-medium text-white text-sm">{template.name}</p>
-                      <p className="text-xs text-slate-300">{template.uses}</p>
+                      <CardTitle className="text-base capitalize text-white">{item.platform}</CardTitle>
+                      <CardDescription>{item.title || 'Generated draft'}</CardDescription>
                     </div>
-                  </div>
-                  <div className="absolute inset-0 bg-purple-500/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                    <Badge className="bg-purple-500 text-white">
-                      <Sparkles className="w-3 h-3 mr-1" /> Use Template
+                    <Badge className={degraded ? 'border border-amber-500/30 bg-amber-500/15 text-amber-300' : 'border border-emerald-500/30 bg-emerald-500/15 text-emerald-300'}>
+                      {String(metadata.generation_status || item.status).replaceAll('_', ' ')}
                     </Badge>
                   </div>
-                </motion.div>
-              ))}
-            </CardContent>
-          </Card>
-
-          {/* AI Tips */}
-          <Card className="bg-gradient-to-br from-purple-900/20 to-pink-900/20 border-purple-500/30">
-            <CardContent className="p-4">
-              <div className="flex items-start gap-3">
-                <div className="p-2 bg-purple-500/20 rounded-lg">
-                  <Sparkles className="w-5 h-5 text-purple-400" />
-                </div>
-                <div>
-                  <h4 className="font-medium text-slate-200 mb-1">Pro Tip</h4>
-                  <p className="text-sm text-slate-400">
-                    Use specific color names and lighting descriptions for better results. Try "neon blue lighting with soft shadows."
-                  </p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        </motion.div>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div>
+                    <p className="text-xs uppercase tracking-wide text-slate-500">Caption / Body</p>
+                    <p className="mt-2 whitespace-pre-wrap text-sm text-slate-200">{item.caption}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs uppercase tracking-wide text-slate-500">CTA</p>
+                    <p className="mt-2 text-sm text-slate-200">{String(metadata.cta || 'Review CTA before approval.')}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs uppercase tracking-wide text-slate-500">Hashtags</p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {hashtags.length > 0 ? hashtags.map((tag) => (
+                        <Badge key={tag} className="border border-[#252A3A] bg-[#141720] text-slate-200">{tag}</Badge>
+                      )) : <span className="text-sm text-slate-400">No hashtags</span>}
+                    </div>
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="rounded-xl border border-[#252A3A] bg-[#141720] p-3 text-xs text-slate-300">
+                      <p className="font-medium text-white">Generation status</p>
+                      <p className="mt-1">{String(metadata.generation_status || item.status).replaceAll('_', ' ')}</p>
+                      {degraded ? <p className="mt-1 text-amber-300">Fallback or template output used. Review before posting.</p> : null}
+                    </div>
+                    <div className="rounded-xl border border-[#252A3A] bg-[#141720] p-3 text-xs text-slate-300">
+                      <p className="font-medium text-white">Scrape source / status</p>
+                      <p className="mt-1">{String(metadata.scrape_provider || 'manual')} • {String(metadata.scrape_status || 'unknown')}</p>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-3">
+                    <Button
+                      variant="outline"
+                      onClick={() => toast.success('Draft is already saved in the content library.')}
+                      className="border-[#252A3A] bg-transparent text-slate-200 hover:bg-white/5"
+                    >
+                      <Save className="mr-2 h-4 w-4" />
+                      Save
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={async () => {
+                        await navigator.clipboard.writeText(item.caption);
+                        toast.success('Copied draft to clipboard.');
+                      }}
+                      className="border-[#252A3A] bg-transparent text-slate-200 hover:bg-white/5"
+                    >
+                      <Copy className="mr-2 h-4 w-4" />
+                      Copy
+                    </Button>
+                    <Link to="/dashboard/approval">
+                      <Button variant="outline" className="border-[#252A3A] bg-transparent text-slate-200 hover:bg-white/5">
+                        <Send className="mr-2 h-4 w-4" />
+                        Send to Approval Queue
+                      </Button>
+                    </Link>
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })
+        )}
       </div>
     </div>
   );
