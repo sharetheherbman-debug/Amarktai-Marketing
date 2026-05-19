@@ -1,31 +1,40 @@
 """
-Settings endpoint — user preferences, API keys, billing.
+Settings endpoint — user preferences, provider keys, readiness, and billing.
 """
 
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
 from sqlalchemy import text as sql_text
+from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
+from app.core.config import settings
 from app.db.session import get_db
 from app.models.user import User
 from app.models.user_api_key import UserAPIKey
 from app.services.genx_client import GenXClient
 from app.services.posting_readiness import PLATFORM_KEYS, publishing_readiness
+from app.services.provider_catalog import (
+    GLOBAL_ENV_KEYS,
+    USER_PROVIDER_KEYS,
+    USER_PROVIDER_KEY_NAMES,
+    mask_value,
+    resolve_user_api_key,
+)
+from app.services.scraper import test_firecrawl_key
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 _GENX_LAST_TEST_STATE: dict[str, dict[str, Any]] = {}
+_FIRECRAWL_LAST_TEST_STATE: dict[str, dict[str, Any]] = {}
 
-
-# ── Schemas ──────────────────────────────────────────────────────────────────
 
 class PreferencesUpdate(BaseModel):
     timezone: str | None = None
@@ -41,182 +50,27 @@ class APIKeyUpdate(BaseModel):
     key_value: str
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-def _mask(value: str | None) -> str:
-    """Return a masked representation — never return plaintext."""
-    if not value:
-        return ""
-    if len(value) <= 8:
-        return "****"
-    return value[:4] + "****" + value[-4:]
+class APIKeyTestRequest(BaseModel):
+    key_name: str
+    key_value: str | None = None
 
 
-def _encrypt(value: str) -> str:
-    """Encrypt a plaintext value using the app encryption key."""
-    from app.models.user_api_key import UserAPIKey
-    return UserAPIKey.encrypt_key(value)
-
-
-def _decrypt(value: str) -> str:
-    """Decrypt an encrypted value."""
-    from app.models.user_api_key import UserAPIKey
-    return UserAPIKey.decrypt_key(value)
-
-
-# ── GET /settings ─────────────────────────────────────────────────────────────
-
-@router.get("")
-async def get_settings(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> dict[str, Any]:
-    """Return current user preferences."""
-    prefs = current_user.notification_preferences or {}
-    return {
-        "timezone": getattr(current_user, "timezone", "UTC") or "UTC",
-        "language": getattr(current_user, "preferred_language", "en") or "en",
-        "notification_email": prefs.get("email", True),
-        "notification_digest": prefs.get("digest", True),
-        "auto_post_enabled": getattr(current_user, "auto_post_enabled", False) or False,
-        "auto_reply_enabled": getattr(current_user, "auto_reply_enabled", False) or False,
-        "plan_tier": getattr(current_user, "plan", "free"),
-    }
-
-
-# ── PUT /settings ─────────────────────────────────────────────────────────────
-
-@router.put("")
-async def update_settings(
-    payload: PreferencesUpdate,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> dict[str, Any]:
-    """Update user preferences."""
-    if payload.timezone is not None:
-        current_user.timezone = payload.timezone
-    if payload.language is not None:
-        current_user.preferred_language = payload.language
-    # notification_email / notification_digest stored in notification_preferences JSON
-    prefs: dict = current_user.notification_preferences or {}
-    if payload.notification_email is not None:
-        prefs["email"] = payload.notification_email
-    if payload.notification_digest is not None:
-        prefs["digest"] = payload.notification_digest
-    current_user.notification_preferences = prefs
-    # Automation preferences
-    if payload.auto_post_enabled is not None:
-        current_user.auto_post_enabled = payload.auto_post_enabled
-    if payload.auto_reply_enabled is not None:
-        current_user.auto_reply_enabled = payload.auto_reply_enabled
-    db.commit()
-    db.refresh(current_user)
-    return {"ok": True}
-
-
-# ── GET /settings/api-keys ────────────────────────────────────────────────────
-
-_PROVIDER_KEYS = [
-    "GENX_API_KEY",
-    "GENX_BASE_URL",
-    "GENX_DEFAULT_MODEL",
-    "GENX_MODEL_COPY",
-    "GENX_MODEL_STRATEGY",
-    "GENX_MODEL_ANALYSIS",
-    "GENX_MODEL_LONG_FORM",
-    "GENX_MODEL_MODERATION",
-    "GENX_MODEL_FALLBACKS",
-    "GENX_MODEL_ALLOWLIST",
-    "QWEN_API_KEY",
-    "HUGGINGFACE_TOKEN",
-    "OPENAI_API_KEY",
-    "GEMINI_API_KEY",
-    "FIRECRAWL_API_KEY",
-    "RESEND_API_KEY",
-    "STRIPE_SECRET_KEY",
-    "STRIPE_WEBHOOK_SECRET",
-]
-
-
-@router.get("/api-keys")
-async def get_api_keys(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> dict[str, Any]:
-    """Return masked provider key status — never plaintext."""
-    from app.models.user_api_key import UserAPIKey
-
-    rows = db.query(UserAPIKey).filter(UserAPIKey.user_id == current_user.id).all()
-    stored: dict[str, str] = {r.key_name: r.encrypted_key for r in rows}
-
-    result: dict[str, dict] = {}
-    for key_name in _PROVIDER_KEYS:
-        enc = stored.get(key_name, "")
-        result[key_name] = {
-            "configured": bool(enc),
-            "masked": _mask(_decrypt(enc)) if enc else "",
-        }
-    return {"keys": result}
-
-
-# ── PUT /settings/api-keys ────────────────────────────────────────────────────
-
-@router.put("/api-keys")
-async def update_api_keys(
-    payload: APIKeyUpdate,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> dict[str, Any]:
-    """Store an encrypted provider API key."""
-    if payload.key_name not in _PROVIDER_KEYS:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unknown key_name '{payload.key_name}'. Allowed: {_PROVIDER_KEYS}",
-        )
-    from app.models.user_api_key import UserAPIKey
-
-    enc = _encrypt(payload.key_value.strip())
-    row = db.query(UserAPIKey).filter(
-        UserAPIKey.user_id == current_user.id,
-        UserAPIKey.key_name == payload.key_name,
-    ).first()
-    if row:
-        row.encrypted_key = enc
-    else:
-        import uuid
-        row = UserAPIKey(
-            id=str(uuid.uuid4()),
-            user_id=current_user.id,
-            key_name=payload.key_name,
-            encrypted_key=enc,
-            is_active=True,
-        )
-        db.add(row)
-    db.commit()
-    return {"ok": True, "key_name": payload.key_name}
-
-
-# ── GET /settings/billing ─────────────────────────────────────────────────────
-
-@router.get("/billing")
-async def get_billing(
-    current_user: User = Depends(get_current_user),
-) -> dict[str, Any]:
-    """Return plan tier and quota information."""
-    plan = getattr(current_user, "plan", "free") or "free"
-    quota_map = {"free": 50, "pro": 500, "business": 2000, "enterprise": 99999}
-    used = getattr(current_user, "monthly_content_used", 0) or 0
-    limit = quota_map.get(str(plan), 50)
-    return {
-        "plan_tier": str(plan),
-        "quota_used": used,
-        "quota_limit": limit,
-        "quota_remaining": max(0, limit - used),
-    }
+class FirecrawlTestRequest(BaseModel):
+    key_value: str | None = None
 
 
 def _provider_state(configured: bool) -> str:
     return "configured" if configured else "not_configured"
+
+
+def _test_state(configured: bool, *, ok: bool | None = None) -> str:
+    if not configured:
+        return "missing"
+    if ok is True:
+        return "test_passed"
+    if ok is False:
+        return "test_failed"
+    return "configured"
 
 
 def _is_oauth_configured(client_id: str | None, client_secret: str | None) -> bool:
@@ -229,16 +83,6 @@ def _active_key_rows(db: Session, user_id: str) -> dict[str, UserAPIKey]:
         UserAPIKey.is_active == True,
     ).all()
     return {r.key_name: r for r in rows}
-
-
-def _get_key_or_env(db_keys: dict[str, UserAPIKey], key_name: str, env_value: str = "") -> str:
-    row = db_keys.get(key_name)
-    if row:
-        try:
-            return row.get_decrypted_key()
-        except Exception:
-            return ""
-    return env_value or ""
 
 
 def _genx_task_models() -> dict[str, str]:
@@ -267,16 +111,239 @@ def _configured_genx_models() -> dict[str, Any]:
     }
 
 
+async def _run_genx_test(api_key: str) -> dict[str, Any]:
+    configured = _configured_genx_models()
+    client = GenXClient(
+        api_key=api_key,
+        base_url=settings.GENX_BASE_URL,
+        default_model=configured["default_model"],
+    )
+    health = await client.health_check()
+    return {
+        "ok": bool(health.get("ok")),
+        "error": health.get("error"),
+        "latency_ms": health.get("latency_ms", 0),
+        "model": health.get("model") or configured["default_model"],
+        "base_url": settings.GENX_BASE_URL,
+    }
+
+
+def _record_firecrawl_test(user_id: str, *, ok: bool, error: str = "") -> dict[str, Any]:
+    checked_at = datetime.now(timezone.utc).isoformat()
+    _FIRECRAWL_LAST_TEST_STATE[user_id] = {
+        "checked_at": checked_at,
+        "ok": ok,
+        "error": error,
+    }
+    return _FIRECRAWL_LAST_TEST_STATE[user_id]
+
+
+@router.get("")
+async def get_settings(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    prefs = current_user.notification_preferences or {}
+    return {
+        "timezone": getattr(current_user, "timezone", "UTC") or "UTC",
+        "language": getattr(current_user, "preferred_language", "en") or "en",
+        "notification_email": prefs.get("email", True),
+        "notification_digest": prefs.get("digest", True),
+        "auto_post_enabled": getattr(current_user, "auto_post_enabled", False) or False,
+        "auto_reply_enabled": getattr(current_user, "auto_reply_enabled", False) or False,
+        "plan_tier": getattr(current_user, "plan", "free"),
+    }
+
+
+@router.put("")
+async def update_settings(
+    payload: PreferencesUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    if payload.timezone is not None:
+        current_user.timezone = payload.timezone
+    if payload.language is not None:
+        current_user.preferred_language = payload.language
+    prefs: dict[str, Any] = current_user.notification_preferences or {}
+    if payload.notification_email is not None:
+        prefs["email"] = payload.notification_email
+    if payload.notification_digest is not None:
+        prefs["digest"] = payload.notification_digest
+    current_user.notification_preferences = prefs
+    if payload.auto_post_enabled is not None:
+        current_user.auto_post_enabled = payload.auto_post_enabled
+    if payload.auto_reply_enabled is not None:
+        current_user.auto_reply_enabled = payload.auto_reply_enabled
+    db.commit()
+    db.refresh(current_user)
+    return {"ok": True}
+
+
+@router.get("/api-keys")
+async def get_api_keys(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    rows = _active_key_rows(db, current_user.id)
+
+    user_keys: list[dict[str, Any]] = []
+    legacy_keys: dict[str, dict[str, Any]] = {}
+    for spec in USER_PROVIDER_KEYS:
+        row = rows.get(spec["key_name"])
+        user_value = ""
+        if row:
+            try:
+                user_value = row.get_decrypted_key()
+            except Exception:
+                user_value = ""
+        env_value = getattr(settings, spec["key_name"], "") or ""
+        item = {
+            **spec,
+            "configured": bool(user_value),
+            "masked": mask_value(user_value),
+            "source": "user" if user_value else "missing",
+            "effective_configured": bool(user_value or env_value),
+            "effective_source": "user" if user_value else ("env" if env_value else "missing"),
+        }
+        user_keys.append(item)
+        legacy_keys[spec["key_name"]] = {
+            "configured": item["configured"],
+            "masked": item["masked"],
+            "effective_configured": item["effective_configured"],
+            "effective_source": item["effective_source"],
+        }
+
+    global_keys: list[dict[str, Any]] = []
+    for spec in GLOBAL_ENV_KEYS:
+        value = getattr(settings, spec["key_name"], "") or ""
+        global_keys.append(
+            {
+                **spec,
+                "configured": bool(value),
+                "masked": mask_value(value, secret=spec.get("secret", True)),
+                "source": "env" if value else "missing",
+            }
+        )
+
+    return {
+        "keys": legacy_keys,
+        "user_keys": user_keys,
+        "global_keys": global_keys,
+    }
+
+
+@router.put("/api-keys")
+async def update_api_keys(
+    payload: APIKeyUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    if payload.key_name not in USER_PROVIDER_KEY_NAMES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown key_name '{payload.key_name}'. Allowed: {sorted(USER_PROVIDER_KEY_NAMES)}",
+        )
+    key_value = payload.key_value.strip()
+    if not key_value:
+        raise HTTPException(status_code=400, detail="Key value cannot be empty.")
+
+    enc = UserAPIKey.encrypt_key(key_value)
+    row = db.query(UserAPIKey).filter(
+        UserAPIKey.user_id == current_user.id,
+        UserAPIKey.key_name == payload.key_name,
+    ).first()
+    if row:
+        row.encrypted_key = enc
+        row.is_active = True
+    else:
+        row = UserAPIKey(
+            id=str(uuid.uuid4()),
+            user_id=current_user.id,
+            key_name=payload.key_name,
+            encrypted_key=enc,
+            is_active=True,
+        )
+        db.add(row)
+    db.commit()
+    return {"ok": True, "key_name": payload.key_name}
+
+
+@router.post("/api-keys/test")
+async def test_api_key(
+    payload: APIKeyTestRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    if payload.key_name not in USER_PROVIDER_KEY_NAMES:
+        raise HTTPException(status_code=400, detail="Unsupported provider key.")
+
+    key_value = (payload.key_value or "").strip() or resolve_user_api_key(
+        db,
+        current_user.id,
+        payload.key_name,
+        getattr(settings, payload.key_name, "") or "",
+    )
+
+    if not key_value:
+        return {"key_name": payload.key_name, "ok": False, "status": "missing", "error": "Provider key is missing."}
+
+    if payload.key_name == "GENX_API_KEY":
+        result = await _run_genx_test(key_value)
+        return {
+            "key_name": payload.key_name,
+            "ok": result["ok"],
+            "status": _test_state(True, ok=result["ok"]),
+            "error": result["error"],
+            "latency_ms": result["latency_ms"],
+            "model": result["model"],
+            "base_url": result["base_url"],
+        }
+
+    if payload.key_name == "FIRECRAWL_API_KEY":
+        result = await test_firecrawl_key(key_value)
+        recorded = _record_firecrawl_test(current_user.id, ok=bool(result["ok"]), error=str(result.get("error") or ""))
+        return {
+            "key_name": payload.key_name,
+            "ok": bool(result["ok"]),
+            "status": _test_state(True, ok=bool(result["ok"])),
+            "error": result.get("error"),
+            "checked_at": recorded["checked_at"],
+        }
+
+    return {
+        "key_name": payload.key_name,
+        "ok": True,
+        "status": "configured",
+        "error": None,
+        "message": "Stored successfully. Live smoke test is not implemented for this optional fallback provider.",
+    }
+
+
+@router.get("/billing")
+async def get_billing(
+    current_user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    plan = getattr(current_user, "plan", "free") or "free"
+    quota_map = {"free": 50, "pro": 500, "business": 2000, "enterprise": 99999}
+    used = getattr(current_user, "monthly_content_used", 0) or 0
+    limit = quota_map.get(str(plan), 50)
+    return {
+        "plan_tier": str(plan),
+        "quota_used": used,
+        "quota_limit": limit,
+        "quota_remaining": max(0, limit - used),
+    }
+
+
 @router.get("/genx/models")
 async def get_genx_models(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    db_keys = _active_key_rows(db, current_user.id)
-    genx_key = _get_key_or_env(db_keys, "GENX_API_KEY", settings.GENX_API_KEY)
-    base_url = settings.GENX_BASE_URL
+    genx_key = resolve_user_api_key(db, current_user.id, "GENX_API_KEY", settings.GENX_API_KEY)
     configured = _configured_genx_models()
-    client = GenXClient(api_key=genx_key, base_url=base_url, default_model=configured["default_model"])
+    client = GenXClient(api_key=genx_key, base_url=settings.GENX_BASE_URL, default_model=configured["default_model"])
 
     available = await client.list_models()
     source = available.get("source", "configured_env")
@@ -286,8 +353,8 @@ async def get_genx_models(
         available_models = sorted({m for m in seeded if m})
 
     return {
-        "configured": bool(genx_key and base_url and configured["default_model"]),
-        "base_url": base_url,
+        "configured": bool(genx_key and settings.GENX_BASE_URL and configured["default_model"]),
+        "base_url": settings.GENX_BASE_URL,
         "default_model": configured["default_model"],
         "task_models": configured["task_models"],
         "fallback_models": configured["fallback_models"],
@@ -303,8 +370,7 @@ async def test_genx_models(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    db_keys = _active_key_rows(db, current_user.id)
-    genx_key = _get_key_or_env(db_keys, "GENX_API_KEY", settings.GENX_API_KEY)
+    genx_key = resolve_user_api_key(db, current_user.id, "GENX_API_KEY", settings.GENX_API_KEY)
     configured = _configured_genx_models()
     client = GenXClient(
         api_key=genx_key,
@@ -318,9 +384,8 @@ async def test_genx_models(
             checks.append((task, model))
     for model in configured["fallback_models"]:
         checks.append(("fallback", model))
-    if configured["allowlist"]:
-        for model in configured["allowlist"]:
-            checks.append(("allowlist", model))
+    for model in configured["allowlist"]:
+        checks.append(("allowlist", model))
 
     seen: set[tuple[str, str]] = set()
     deduped: list[tuple[str, str]] = []
@@ -338,15 +403,17 @@ async def test_genx_models(
             result["task"] = task
             results.append(result)
         except Exception:
-            results.append({
-                "model": model,
-                "task": task,
-                "ok": False,
-                "latency_ms": 0,
-                "error": "Model test failed",
-                "sample_hash": "",
-                "sample_preview": "",
-            })
+            results.append(
+                {
+                    "model": model,
+                    "task": task,
+                    "ok": False,
+                    "latency_ms": 0,
+                    "error": "Model test failed",
+                    "sample_hash": "",
+                    "sample_preview": "",
+                }
+            )
 
     required_slots = {"default", "copy", "strategy", "analysis"}
     required_models_ok = all(
@@ -372,19 +439,39 @@ async def test_genx_models(
     }
 
 
+@router.post("/firecrawl/test")
+async def firecrawl_test(
+    payload: FirecrawlTestRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    firecrawl_key = (payload.key_value or "").strip() or resolve_user_api_key(
+        db,
+        current_user.id,
+        "FIRECRAWL_API_KEY",
+        settings.FIRECRAWL_API_KEY,
+    )
+    if not firecrawl_key:
+        return {"ok": False, "status": "missing", "error": "Firecrawl API key is missing."}
+    result = await test_firecrawl_key(firecrawl_key)
+    recorded = _record_firecrawl_test(current_user.id, ok=bool(result["ok"]), error=str(result.get("error") or ""))
+    return {
+        "ok": bool(result["ok"]),
+        "status": _test_state(True, ok=bool(result["ok"])),
+        "error": result.get("error"),
+        "checked_at": recorded["checked_at"],
+    }
+
+
 @router.get("/readiness")
 async def get_readiness(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    from app.core.config import settings
-
-    db_keys = _active_key_rows(db, current_user.id)
-    user_keys = set(db_keys.keys())
-
-    genx_key = _get_key_or_env(db_keys, "GENX_API_KEY", settings.GENX_API_KEY)
+    genx_key = resolve_user_api_key(db, current_user.id, "GENX_API_KEY", settings.GENX_API_KEY)
+    firecrawl_key = resolve_user_api_key(db, current_user.id, "FIRECRAWL_API_KEY", settings.FIRECRAWL_API_KEY)
     genx_configured = bool(genx_key and settings.GENX_BASE_URL and settings.GENX_DEFAULT_MODEL)
-    firecrawl_configured = bool(settings.FIRECRAWL_API_KEY or "FIRECRAWL_API_KEY" in user_keys)
+    firecrawl_configured = bool(firecrawl_key)
     email_configured = bool(settings.RESEND_API_KEY)
     stripe_configured = bool(settings.STRIPE_SECRET_KEY and settings.STRIPE_WEBHOOK_SECRET)
 
@@ -408,37 +495,80 @@ async def get_readiness(
         db_state = "not_configured"
 
     celery_state = _provider_state(bool(settings.REDIS_URL))
-    genx_client = GenXClient(api_key=genx_key)
-    genx_health = await genx_client.health_check()
+    genx_health = await _run_genx_test(genx_key) if genx_configured else {"ok": False, "error": "GenX is not configured"}
     genx_last = _GENX_LAST_TEST_STATE.get(current_user.id, {})
-    genx_failed_models = genx_last.get("failed_models", [])
+    if firecrawl_configured:
+        firecrawl_probe = await test_firecrawl_key(firecrawl_key)
+        firecrawl_last = _record_firecrawl_test(
+            current_user.id,
+            ok=bool(firecrawl_probe["ok"]),
+            error=str(firecrawl_probe.get("error") or ""),
+        )
+    else:
+        firecrawl_last = _FIRECRAWL_LAST_TEST_STATE.get(current_user.id, {})
     genx_required_models_ok = bool(genx_last.get("required_models_ok")) if genx_last else bool(genx_health.get("ok"))
     posting = publishing_readiness(db, current_user.id)
 
-    providers = {
-        "genx": _provider_state(genx_configured),
-        "firecrawl": _provider_state(firecrawl_configured),
-        "email": _provider_state(email_configured),
-        "stripe": _provider_state(stripe_configured),
-        "database": db_state,
-        "scheduler_celery": celery_state,
+    provider_details = {
+        "genx": {
+            "required": True,
+            "source": "user" if resolve_user_api_key(db, current_user.id, "GENX_API_KEY") else ("env" if settings.GENX_API_KEY else "missing"),
+            "status": _test_state(genx_configured, ok=bool(genx_health.get("ok")) if genx_configured else None),
+            "message": genx_health.get("error") if genx_configured and not genx_health.get("ok") else None,
+        },
+        "firecrawl": {
+            "required": True,
+            "source": "user" if resolve_user_api_key(db, current_user.id, "FIRECRAWL_API_KEY") else ("env" if settings.FIRECRAWL_API_KEY else "missing"),
+            "status": _test_state(
+                firecrawl_configured,
+                ok=firecrawl_last.get("ok") if firecrawl_last else None,
+            ),
+            "message": firecrawl_last.get("error") if firecrawl_last and not firecrawl_last.get("ok") else None,
+        },
+        "qwen": {
+            "required": False,
+            "source": "user" if resolve_user_api_key(db, current_user.id, "QWEN_API_KEY") else ("env" if settings.QWEN_API_KEY else "missing"),
+            "status": _test_state(bool(resolve_user_api_key(db, current_user.id, "QWEN_API_KEY", settings.QWEN_API_KEY))),
+        },
+        "huggingface": {
+            "required": False,
+            "source": "user" if resolve_user_api_key(db, current_user.id, "HUGGINGFACE_TOKEN") else ("env" if settings.HUGGINGFACE_TOKEN else "missing"),
+            "status": _test_state(bool(resolve_user_api_key(db, current_user.id, "HUGGINGFACE_TOKEN", settings.HUGGINGFACE_TOKEN))),
+        },
+        "openai": {
+            "required": False,
+            "source": "user" if resolve_user_api_key(db, current_user.id, "OPENAI_API_KEY") else ("env" if settings.OPENAI_API_KEY else "missing"),
+            "status": _test_state(bool(resolve_user_api_key(db, current_user.id, "OPENAI_API_KEY", settings.OPENAI_API_KEY))),
+        },
+        "gemini": {
+            "required": False,
+            "source": "user" if resolve_user_api_key(db, current_user.id, "GEMINI_API_KEY") else ("env" if settings.GEMINI_API_KEY else "missing"),
+            "status": _test_state(bool(resolve_user_api_key(db, current_user.id, "GEMINI_API_KEY", settings.GEMINI_API_KEY))),
+        },
     }
 
+    providers = {name: detail["status"] for name, detail in provider_details.items()}
+    providers["email"] = _provider_state(email_configured)
+    providers["stripe"] = _provider_state(stripe_configured)
+    providers["database"] = db_state
+    providers["scheduler_celery"] = celery_state
+
     checklist = [
-        {"key": "genx", "label": "GenX AI provider", "status": providers["genx"], "required": True},
-        {"key": "firecrawl", "label": "Firecrawl/scraper intelligence", "status": providers["firecrawl"], "required": False},
+        {"key": "genx", "label": "GenX AI provider", "status": provider_details["genx"]["status"], "required": True},
+        {"key": "firecrawl", "label": "Firecrawl scraper", "status": provider_details["firecrawl"]["status"], "required": True},
         {"key": "database", "label": "Database health", "status": providers["database"], "required": True},
         {"key": "scheduler_celery", "label": "Scheduler/Celery", "status": providers["scheduler_celery"], "required": False},
         {"key": "email", "label": "Email provider", "status": providers["email"], "required": False},
         {"key": "stripe", "label": "Stripe billing", "status": providers["stripe"], "required": False},
     ]
 
-    missing_required = [c["label"] for c in checklist if c["required"] and c["status"] != "configured"]
+    missing_required = [c["label"] for c in checklist if c["required"] and c["status"] not in {"configured", "test_passed"}]
     if not genx_required_models_ok:
         missing_required.append("GenX required models")
 
     return {
         "providers": providers,
+        "provider_details": provider_details,
         "oauth": oauth_states,
         "checklist": checklist,
         "genx": {
@@ -446,8 +576,15 @@ async def get_readiness(
             "health_ok": bool(genx_health.get("ok")),
             "models_tested": bool(genx_last.get("models_tested", False)),
             "required_models_ok": genx_required_models_ok,
-            "failed_models": genx_failed_models,
+            "failed_models": genx_last.get("failed_models", []),
             "last_checked_at": genx_last.get("checked_at"),
+            "status": provider_details["genx"]["status"],
+        },
+        "firecrawl": {
+            "configured": firecrawl_configured,
+            "status": provider_details["firecrawl"]["status"],
+            "last_checked_at": firecrawl_last.get("checked_at"),
+            "error": firecrawl_last.get("error"),
         },
         "social_platforms": {k: posting["platforms"].get(k) for k in PLATFORM_KEYS},
         "missing_required": missing_required,

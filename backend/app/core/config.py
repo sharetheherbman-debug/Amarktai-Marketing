@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     # ==================== LLM API KEYS ====================
     # GenX (primary unified AI provider)
     GENX_API_KEY: str = ""
-    GENX_BASE_URL: str = "https://api.genxai.co/v1"
+    GENX_BASE_URL: str = "https://query.genx.sh/v1"
     GENX_DEFAULT_MODEL: str = "genx-chat-pro"
     GENX_TIMEOUT: int = 60
     GENX_MODEL_ALLOWLIST: str = ""  # comma-separated model IDs

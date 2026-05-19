@@ -19,7 +19,7 @@ from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
-_FIRECRAWL_SCRAPE_URL = "https://api.firecrawl.dev/v1/scrape"
+_FIRECRAWL_SCRAPE_URL = "https://api.firecrawl.dev/v2/scrape"
 
 _SOCIAL_DOMAINS = {"twitter.com", "x.com", "instagram.com", "facebook.com",
                    "linkedin.com", "tiktok.com", "youtube.com", "pinterest.com"}
@@ -258,3 +258,12 @@ async def scrape_multiple(urls: list[str], firecrawl_api_key: str | None = None)
 
     tasks = [scrape_page(url, firecrawl_api_key=firecrawl_api_key) for url in urls]
     return await asyncio.gather(*tasks)
+
+
+async def test_firecrawl_key(api_key: str, *, url: str = "https://example.com") -> dict[str, str | bool]:
+    result = await _scrape_via_firecrawl(url, api_key, timeout=30)
+    if result is None:
+        return {"ok": False, "error": "Firecrawl test scrape failed."}
+    if result.error:
+        return {"ok": False, "error": result.error}
+    return {"ok": True, "error": ""}

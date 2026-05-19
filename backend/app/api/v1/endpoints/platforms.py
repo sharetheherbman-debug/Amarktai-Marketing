@@ -350,31 +350,14 @@ async def connect_platform(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Connect a new platform."""
-    existing = db.query(PlatformModel).filter(
-        PlatformModel.user_id == current_user.id,
-        PlatformModel.platform == platform
-    ).first()
-
-    if existing:
-        existing.is_active = True
-        existing.account_name = account_name
-        db.commit()
-        db.refresh(existing)
-        return existing
-
-    connection = PlatformModel(
-        id=str(uuid.uuid4()),
-        user_id=current_user.id,
-        platform=platform,
-        account_name=account_name,
-        account_id=f"{platform}_{uuid.uuid4().hex[:8]}",
-        is_active=True
+    """Manual platform connection is intentionally blocked; use OAuth integrations."""
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            f"{platform.value} requires a real OAuth/platform connection. "
+            "Use /api/v1/integrations/platforms/{platform}/connect instead."
+        ),
     )
-    db.add(connection)
-    db.commit()
-    db.refresh(connection)
-    return connection
 
 
 @router.post("/{platform}/create-business-page")
@@ -384,41 +367,14 @@ async def create_business_page(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """
-    Create a business/brand page on supported platforms (Facebook, LinkedIn).
-    Returns setup steps and page creation status.
-    """
-    insights = _PLATFORM_ALGORITHM_INSIGHTS.get(platform.value, {})
-    page_info = insights.get("business_pages")
-    if not page_info or not page_info.get("can_create"):
-        raise HTTPException(
-            status_code=400,
-            detail=f"{platform.value} does not support business page creation via this platform.",
-        )
-
-    connection = db.query(PlatformModel).filter(
-        PlatformModel.user_id == current_user.id,
-        PlatformModel.platform == platform,
-    ).first()
-    if not connection or not connection.is_active:
-        raise HTTPException(status_code=400, detail=f"{platform.value} account is not connected.")
-
-    page_id = f"{platform.value}_page_{uuid.uuid4().hex[:10]}"
-
-    return {
-        "status": "initiated",
-        "platform": platform.value,
-        "page_name": body.page_name,
-        "category": body.category,
-        "page_id": page_id,
-        "message": (
-            f"Business page '{body.page_name}' creation initiated on {platform.value}. "
-            "Complete the remaining steps in the platform's interface."
+    """Business page creation is not implemented against live platform APIs."""
+    raise HTTPException(
+        status_code=501,
+        detail=(
+            f"{platform.value} business page creation is not supported yet. "
+            "Create the page directly in the platform and then connect it with OAuth."
         ),
-        "setup_steps": page_info.get("setup_steps", []),
-        "max_pages_per_account": page_info.get("max_pages_per_account"),
-        "created_at": datetime.utcnow().isoformat(),
-    }
+    )
 
 
 @router.patch("/{platform}/budget")

@@ -123,6 +123,7 @@ if settings.APP_ENVIRONMENT == "production":
         parsed = urlparse(origin)
         if parsed.hostname:
             _allowed_hosts.add(parsed.hostname)
+    _allowed_hosts.update({"127.0.0.1", "localhost"})
 
     @app.middleware("http")
     async def enforce_allowed_hosts(request: Request, call_next):

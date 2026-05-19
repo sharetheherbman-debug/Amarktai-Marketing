@@ -1,28 +1,59 @@
-import { useEffect, useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { useEffect, useMemo, useState } from 'react';
 import {
-  Key, Check, X, ExternalLink, RefreshCw, AlertCircle,
-  Youtube, Instagram, Facebook, Twitter, Linkedin, Music, Settings, Plus,
-  Trash2, Eye, EyeOff, MessageSquare, Cloud, AtSign, Send, Camera, Pin,
-  Sparkles, Globe, ChevronRight, CheckCircle2, Loader2,
+  AlertCircle,
+  CheckCircle2,
+  Cloud,
+  ExternalLink,
+  Instagram,
+  Linkedin,
+  Loader2,
+  MessageSquare,
+  Music,
+  Pin,
+  RefreshCw,
+  Send,
+  Twitter,
+  Youtube,
+  Facebook,
+  AtSign,
+  Camera,
 } from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
+import { toast } from 'sonner';
+
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { toast } from 'sonner';
-import { PLATFORM_COUNT } from '@/lib/platformConstants';
 import { getStoredToken } from '@/lib/auth';
 
-interface APIKey {
-  id: string;
+interface ProviderKeyItem {
   key_name: string;
-  is_active: boolean;
-  created_at: string;
+  label: string;
+  provider: string;
+  description: string;
+  required: boolean;
+  configured: boolean;
+  masked: string;
+  source: string;
+  effective_configured: boolean;
+  effective_source: string;
+}
+
+interface GlobalKeyItem {
+  key_name: string;
+  label: string;
+  group: string;
+  required: boolean;
+  configured: boolean;
+  masked: string;
+  source: string;
+}
+
+interface APIKeysResponse {
+  user_keys: ProviderKeyItem[];
+  global_keys: GlobalKeyItem[];
 }
 
 interface PlatformIntegration {
@@ -37,226 +68,246 @@ interface PlatformIntegration {
 
 interface ReadinessData {
   providers: Record<string, string>;
-  oauth: Record<string, string>;
+  provider_details: Record<string, { required: boolean; source: string; status: string; message?: string }>;
   checklist: { key: string; label: string; status: string; required: boolean }[];
   missing_required: string[];
   go_live_ready: boolean;
   genx?: {
+    status: string;
     configured: boolean;
     health_ok: boolean;
     models_tested: boolean;
     required_models_ok: boolean;
     failed_models: { model: string; task: string; error?: string }[];
   };
+  firecrawl?: {
+    status: string;
+    configured: boolean;
+    error?: string | null;
+  };
   social_platforms?: Record<string, { ui_status: string; can_post_now: boolean; missing: string[] }>;
 }
 
-const AVAILABLE_API_KEYS = [
-  { key: 'GENX_API_KEY', name: 'GenX API Key', description: 'Primary unified AI provider for all AI features (REQUIRED)', provider: 'GenX', required: true },
-  { key: 'GENX_BASE_URL', name: 'GenX Base URL', description: 'GenX API base URL', provider: 'GenX', required: true },
-  { key: 'GENX_DEFAULT_MODEL', name: 'GenX Default Model', description: 'Default model for general generation tasks', provider: 'GenX', required: true },
-  { key: 'GENX_MODEL_COPY', name: 'GenX Copy Model', description: 'Model override for copywriting', provider: 'GenX', required: false },
-  { key: 'GENX_MODEL_STRATEGY', name: 'GenX Strategy Model', description: 'Model override for strategy', provider: 'GenX', required: false },
-  { key: 'GENX_MODEL_ANALYSIS', name: 'GenX Analysis Model', description: 'Model override for analysis', provider: 'GenX', required: false },
-  { key: 'GENX_MODEL_LONG_FORM', name: 'GenX Long-form Model', description: 'Model override for long-form writing', provider: 'GenX', required: false },
-  { key: 'GENX_MODEL_MODERATION', name: 'GenX Moderation Model', description: 'Model override for moderation', provider: 'GenX', required: false },
-  { key: 'GENX_MODEL_FALLBACKS', name: 'GenX Fallback Models', description: 'Comma-separated fallback model IDs', provider: 'GenX', required: false },
-  { key: 'GENX_MODEL_ALLOWLIST', name: 'GenX Model Allowlist', description: 'Comma-separated allowlist model IDs', provider: 'GenX', required: false },
-  { key: 'FIRECRAWL_API_KEY', name: 'Firecrawl API Key', description: 'Web scraping & competitive research (REQUIRED)', provider: 'Firecrawl', required: true },
-  { key: 'RESEND_API_KEY', name: 'Email Provider Key', description: 'Email provider API key', provider: 'Resend', required: false },
-  { key: 'STRIPE_SECRET_KEY', name: 'Stripe Secret Key', description: 'Stripe billing secret key', provider: 'Stripe', required: false },
-  { key: 'STRIPE_WEBHOOK_SECRET', name: 'Stripe Webhook Secret', description: 'Stripe webhook signing secret', provider: 'Stripe', required: false },
-  { key: 'QWEN_API_KEY', name: 'Qwen / DashScope API Key', description: 'Legacy fallback provider', provider: 'Qwen (DashScope)', required: false },
-  { key: 'HUGGINGFACE_TOKEN', name: 'HuggingFace Token', description: 'Legacy fallback provider', provider: 'HuggingFace', required: false },
-  { key: 'OPENAI_API_KEY', name: 'OpenAI API Key', description: 'Optional compatibility fallback', provider: 'OpenAI', required: false },
-  { key: 'GEMINI_API_KEY', name: 'Google Gemini API Key', description: 'Optional compatibility fallback', provider: 'Google Gemini', required: false },
-];
-
 const PLATFORMS = [
-  { id: 'youtube', name: 'YouTube', icon: Youtube, color: 'text-red-500', bgColor: 'bg-red-500/10', description: 'Upload Shorts & long-form videos' },
-  { id: 'tiktok', name: 'TikTok', icon: Music, color: 'text-pink-500', bgColor: 'bg-pink-500/10', description: 'Post short-form viral videos' },
-  { id: 'instagram', name: 'Instagram', icon: Instagram, color: 'text-purple-500', bgColor: 'bg-purple-500/10', description: 'Posts, Stories, Reels' },
-  { id: 'facebook', name: 'Facebook', icon: Facebook, color: 'text-blue-500', bgColor: 'bg-blue-500/10', description: 'Page posts and Reels' },
-  { id: 'twitter', name: 'Twitter / X', icon: Twitter, color: 'text-sky-500', bgColor: 'bg-sky-500/10', description: 'Tweets and threads' },
-  { id: 'linkedin', name: 'LinkedIn', icon: Linkedin, color: 'text-blue-600', bgColor: 'bg-blue-600/10', description: 'Professional posts and articles' },
-  { id: 'pinterest', name: 'Pinterest', icon: Pin, color: 'text-red-600', bgColor: 'bg-red-600/10', description: 'Pins and idea boards' },
-  { id: 'reddit', name: 'Reddit', icon: MessageSquare, color: 'text-orange-500', bgColor: 'bg-orange-500/10', description: 'Posts and community threads' },
-  { id: 'bluesky', name: 'Bluesky', icon: Cloud, color: 'text-sky-400', bgColor: 'bg-sky-400/10', description: 'Short posts on AT Protocol' },
-  { id: 'threads', name: 'Threads', icon: AtSign, color: 'text-gray-800', bgColor: 'bg-gray-800/10', description: 'Text threads by Meta' },
-  { id: 'telegram', name: 'Telegram', icon: Send, color: 'text-blue-400', bgColor: 'bg-blue-400/10', description: 'Channel and group messages' },
-  { id: 'snapchat', name: 'Snapchat', icon: Camera, color: 'text-yellow-500', bgColor: 'bg-yellow-500/10', description: 'Stories and Spotlight' },
-];
+  { id: 'youtube', name: 'YouTube', icon: Youtube },
+  { id: 'tiktok', name: 'TikTok', icon: Music },
+  { id: 'instagram', name: 'Instagram', icon: Instagram },
+  { id: 'facebook', name: 'Facebook', icon: Facebook },
+  { id: 'twitter', name: 'Twitter / X', icon: Twitter },
+  { id: 'linkedin', name: 'LinkedIn', icon: Linkedin },
+  { id: 'pinterest', name: 'Pinterest', icon: Pin },
+  { id: 'reddit', name: 'Reddit', icon: MessageSquare },
+  { id: 'bluesky', name: 'Bluesky', icon: Cloud },
+  { id: 'threads', name: 'Threads', icon: AtSign },
+  { id: 'telegram', name: 'Telegram', icon: Send },
+  { id: 'snapchat', name: 'Snapchat', icon: Camera },
+] as const;
+
+const statusTone: Record<string, string> = {
+  test_passed: 'bg-green-100 text-green-700 border-green-200',
+  configured: 'bg-blue-100 text-blue-700 border-blue-200',
+  test_failed: 'bg-red-100 text-red-700 border-red-200',
+  missing: 'bg-amber-100 text-amber-800 border-amber-200',
+  not_configured: 'bg-amber-100 text-amber-800 border-amber-200',
+};
+
+function authHeaders(): Record<string, string> {
+  const token = getStoredToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
 
 export default function IntegrationsPage() {
-  const [apiKeys, setApiKeys] = useState<APIKey[]>([]);
+  const [apiKeys, setApiKeys] = useState<APIKeysResponse>({ user_keys: [], global_keys: [] });
   const [integrations, setIntegrations] = useState<PlatformIntegration[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [showAddKeyDialog, setShowAddKeyDialog] = useState(false);
-  const [selectedKeyType, setSelectedKeyType] = useState('');
-  const [keyValue, setKeyValue] = useState('');
-  const [showKeyValue, setShowKeyValue] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
   const [readiness, setReadiness] = useState<ReadinessData | null>(null);
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [isLoading, setIsLoading] = useState(true);
+  const [savingKey, setSavingKey] = useState<string | null>(null);
+  const [testingKey, setTestingKey] = useState<string | null>(null);
+  const [updatingPlatform, setUpdatingPlatform] = useState<string | null>(null);
+
+  const globalKeyGroups = useMemo(() => {
+    return apiKeys.global_keys.reduce<Record<string, GlobalKeyItem[]>>((acc, item) => {
+      acc[item.group] = [...(acc[item.group] || []), item];
+      return acc;
+    }, {});
+  }, [apiKeys.global_keys]);
 
   useEffect(() => {
     fetchData();
+
+    const onMessage = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return;
+      if (event.data?.type !== 'amarktai-oauth-complete') return;
+      toast.success(event.data.ok ? `${event.data.platform} connected` : `${event.data.platform} connection failed`);
+      fetchData();
+    };
+
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
   }, []);
 
   const fetchData = async () => {
     try {
       setIsLoading(true);
-      const token = getStoredToken();
-      const authHeaders: Record<string, string> = {};
-      if (token) authHeaders.Authorization = `Bearer ${token}`;
-      
-      // Fetch API keys
-      const keysRes = await fetch('/api/v1/integrations/api-keys', { headers: authHeaders });
-      if (keysRes.ok) {
-        setApiKeys(await keysRes.json());
-      }
-      
-      // Fetch integrations
-      const integrationsRes = await fetch('/api/v1/integrations/platforms', { headers: authHeaders });
-      if (integrationsRes.ok) {
-        setIntegrations(await integrationsRes.json());
-      }
+      const headers = authHeaders();
+      const [keysRes, integrationsRes, readinessRes] = await Promise.all([
+        fetch('/api/v1/settings/api-keys', { headers }),
+        fetch('/api/v1/integrations/platforms', { headers }),
+        fetch('/api/v1/settings/readiness', { headers }),
+      ]);
 
-      const readinessRes = await fetch('/api/v1/settings/readiness', { headers: authHeaders });
-      if (readinessRes.ok) {
-        setReadiness(await readinessRes.json());
-      }
-    } catch (error) {
+      if (keysRes.ok) setApiKeys(await keysRes.json() as APIKeysResponse);
+      if (integrationsRes.ok) setIntegrations(await integrationsRes.json() as PlatformIntegration[]);
+      if (readinessRes.ok) setReadiness(await readinessRes.json() as ReadinessData);
+    } catch {
       toast.error('Failed to load integrations');
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleAddKey = async () => {
-    if (!selectedKeyType || !keyValue) {
-      toast.error('Please select key type and enter value');
+  const saveKey = async (keyName: string) => {
+    const keyValue = (drafts[keyName] || '').trim();
+    if (!keyValue) {
+      toast.error('Enter a key value first');
       return;
     }
 
-    setIsSaving(true);
+    setSavingKey(keyName);
     try {
-      const token = getStoredToken();
-      const res = await fetch('/api/v1/integrations/api-keys', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({ key_name: selectedKeyType, key_value: keyValue }),
+      const res = await fetch('/api/v1/settings/api-keys', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ key_name: keyName, key_value: keyValue }),
       });
-
-      if (res.ok) {
-        toast.success('API key saved successfully');
-        setShowAddKeyDialog(false);
-        setKeyValue('');
-        setSelectedKeyType('');
-        fetchData();
-      } else {
-        toast.error('Failed to save API key');
-      }
-    } catch (error) {
-      toast.error('Error saving API key');
+      if (!res.ok) throw new Error();
+      setDrafts((prev) => ({ ...prev, [keyName]: '' }));
+      toast.success('Provider key saved');
+      await fetchData();
+    } catch {
+      toast.error('Failed to save key');
     } finally {
-      setIsSaving(false);
+      setSavingKey(null);
     }
   };
 
-  const handleDeleteKey = async (keyId: string) => {
+  const testKey = async (keyName: string) => {
+    setTestingKey(keyName);
     try {
-      const token = getStoredToken();
-      const res = await fetch(`/api/v1/integrations/api-keys/${keyId}`, {
-        method: 'DELETE',
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      const keyValue = (drafts[keyName] || '').trim();
+      const res = await fetch('/api/v1/settings/api-keys/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ key_name: keyName, key_value: keyValue || undefined }),
       });
-
-      if (res.ok) {
-        toast.success('API key removed');
-        fetchData();
-      } else {
-        toast.error('Failed to remove API key');
-      }
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || 'Test failed');
+      toast.success(`${keyName} test passed`);
+      await fetchData();
     } catch (error) {
-      toast.error('Error removing API key');
+      toast.error(error instanceof Error ? error.message : 'Test failed');
+      await fetchData();
+    } finally {
+      setTestingKey(null);
+    }
+  };
+
+  const testGenxModels = async () => {
+    setTestingKey('GENX_MODELS');
+    try {
+      const res = await fetch('/api/v1/settings/genx/test-models', {
+        method: 'POST',
+        headers: authHeaders(),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.required_models_ok) throw new Error(data.failed_models?.[0]?.error || 'One or more required models failed');
+      toast.success('GenX model tests passed');
+      await fetchData();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'GenX model test failed');
+      await fetchData();
+    } finally {
+      setTestingKey(null);
+    }
+  };
+
+  const testFirecrawl = async () => {
+    setTestingKey('FIRECRAWL_CHECK');
+    try {
+      const res = await fetch('/api/v1/settings/firecrawl/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || 'Firecrawl test failed');
+      toast.success('Firecrawl test passed');
+      await fetchData();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Firecrawl test failed');
+      await fetchData();
+    } finally {
+      setTestingKey(null);
     }
   };
 
   const handleConnectPlatform = async (platform: string) => {
     try {
-      const token = getStoredToken();
       const res = await fetch(`/api/v1/integrations/platforms/${platform}/connect`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        headers: authHeaders(),
       });
-      if (res.ok) {
-        const data = await res.json();
-        // Open OAuth popup
-        const width = 500;
-        const height = 600;
-        const left = window.screenX + (window.outerWidth - width) / 2;
-        const top = window.screenY + (window.outerHeight - height) / 2;
-        window.open(
-          data.auth_url,
-          'Connect Platform',
-          `width=${width},height=${height},left=${left},top=${top}`
-        );
-      } else {
-        toast.error('Failed to initiate connection');
-      }
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Failed to initiate connection');
+
+      const width = 560;
+      const height = 720;
+      const left = window.screenX + (window.outerWidth - width) / 2;
+      const top = window.screenY + (window.outerHeight - height) / 2;
+      window.open(data.auth_url, 'Connect Platform', `width=${width},height=${height},left=${left},top=${top}`);
     } catch (error) {
-      toast.error('Error connecting platform');
+      toast.error(error instanceof Error ? error.message : 'Failed to initiate connection');
     }
   };
 
   const handleDisconnectPlatform = async (platform: string) => {
+    setUpdatingPlatform(platform);
     try {
-      const token = getStoredToken();
       const res = await fetch(`/api/v1/integrations/platforms/${platform}/disconnect`, {
         method: 'POST',
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        headers: authHeaders(),
       });
-
-      if (res.ok) {
-        toast.success(`${platform} disconnected`);
-        fetchData();
-      } else {
-        toast.error('Failed to disconnect');
-      }
-    } catch (error) {
-      toast.error('Error disconnecting platform');
+      if (!res.ok) throw new Error();
+      toast.success(`${platform} disconnected`);
+      await fetchData();
+    } catch {
+      toast.error('Failed to disconnect');
+    } finally {
+      setUpdatingPlatform(null);
     }
   };
 
   const handleUpdateIntegration = async (platform: string, updates: Partial<PlatformIntegration>) => {
+    setUpdatingPlatform(platform);
     try {
-      const token = getStoredToken();
       const res = await fetch(`/api/v1/integrations/platforms/${platform}`, {
         method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify(updates),
       });
-
-      if (res.ok) {
-        fetchData();
-      }
-    } catch (error) {
-      toast.error('Failed to update settings');
+      if (!res.ok) throw new Error();
+      await fetchData();
+    } catch {
+      toast.error('Failed to update platform settings');
+    } finally {
+      setUpdatingPlatform(null);
     }
   };
-
-  const activeKeysCount = apiKeys.filter(k => k.is_active).length;
-  const connectedPlatformsCount = integrations.filter(i => i.is_connected).length;
 
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-24">
-        <Loader2 className="w-8 h-8 animate-spin text-violet-500" />
+        <Loader2 className="h-8 w-8 animate-spin text-violet-500" />
       </div>
     );
   }
@@ -264,421 +315,256 @@ export default function IntegrationsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-2xl font-bold">API Keys & Integrations</h2>
-        <p className="text-gray-500">Connect your accounts and add API keys for enhanced AI generation</p>
+        <h2 className="text-2xl font-bold">Providers & Integrations</h2>
+        <p className="text-gray-500">
+          Add GenX and Firecrawl once here, then connect social platforms with OAuth.
+        </p>
       </div>
 
       {readiness && (
         <Card className={readiness.go_live_ready ? 'border-green-200 bg-green-50/40' : 'border-amber-200 bg-amber-50/40'}>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <AlertCircle className="w-5 h-5" />
+              <AlertCircle className="h-5 w-5" />
               Go-live readiness
             </CardTitle>
             <CardDescription>
-              Providers and integrations are shown as configured / not_configured. Missing items stay yellow/red until fixed.
+              GenX and Firecrawl are required. Social posting stays blocked until a valid OAuth connection exists.
             </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="flex flex-wrap gap-2">
-              {Object.entries(readiness.providers).map(([key, status]) => (
-                <Badge key={key} variant={status === 'configured' ? 'default' : 'outline'}>
-                  {key}: {status}
+          <CardContent className="space-y-4">
+            <div className="grid gap-3 md:grid-cols-2">
+              {(['genx', 'firecrawl', 'qwen', 'huggingface', 'openai', 'gemini'] as const).map((provider) => {
+                const detail = readiness.provider_details?.[provider];
+                if (!detail) return null;
+                return (
+                  <div key={provider} className="rounded-lg border bg-white/80 p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="font-medium capitalize">
+                        {provider === 'huggingface' ? 'HuggingFace' : provider}
+                        {detail.required ? ' (required)' : ' (optional)'}
+                      </div>
+                      <Badge className={statusTone[detail.status] || statusTone.configured}>{detail.status}</Badge>
+                    </div>
+                    <p className="mt-1 text-xs text-gray-600">
+                      Source: {detail.source === 'missing' ? 'not configured' : detail.source}
+                    </p>
+                    {detail.message && <p className="mt-1 text-xs text-red-600">{detail.message}</p>}
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="flex flex-wrap gap-2 text-xs">
+              {readiness.checklist.map((item) => (
+                <Badge key={item.key} className={statusTone[item.status] || statusTone.configured}>
+                  {item.label}: {item.status}
                 </Badge>
               ))}
             </div>
-            <div className="space-y-1 text-sm">
-              {readiness.checklist.map((item) => (
-                <p key={item.key} className={item.status === 'configured' ? 'text-green-700' : 'text-amber-700'}>
-                  {item.required ? '•' : '◦'} {item.label}: {item.status}
-                </p>
-              ))}
+
+            {!!readiness.missing_required.length && (
+              <div className="text-sm text-amber-900">
+                Missing required items: {readiness.missing_required.join(', ')}
+              </div>
+            )}
+
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="outline"
+                onClick={testGenxModels}
+                disabled={testingKey === 'GENX_MODELS'}
+              >
+                {testingKey === 'GENX_MODELS' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                Test GenX models
+              </Button>
+              <Button
+                variant="outline"
+                onClick={testFirecrawl}
+                disabled={testingKey === 'FIRECRAWL_CHECK'}
+              >
+                {testingKey === 'FIRECRAWL_CHECK' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                Test Firecrawl
+              </Button>
             </div>
-            <div className="space-y-1 text-xs text-gray-600">
-              <p className="font-medium">OAuth credentials</p>
-              <div className="flex flex-wrap gap-2">
-                {Object.entries(readiness.oauth).map(([platform, status]) => (
-                  <Badge key={platform} variant={status === 'configured' ? 'default' : 'outline'}>
-                    {platform}: {status}
-                  </Badge>
-                ))}
-              </div>
-            </div>
-            {readiness.social_platforms && (
-              <div className="space-y-1 text-xs text-gray-600">
-                <p className="font-medium">Posting readiness</p>
-                <div className="flex flex-wrap gap-2">
-                  {Object.entries(readiness.social_platforms).map(([platform, state]) => (
-                    <Badge key={platform} variant={state.can_post_now ? 'default' : 'outline'}>
-                      {platform}: {state.ui_status}
-                    </Badge>
-                  ))}
-                </div>
-              </div>
-            )}
-            {readiness.genx && (
-              <div className="text-xs text-gray-700">
-                GenX: {readiness.genx.configured ? 'configured' : 'not configured'} ·
-                health {readiness.genx.health_ok ? 'ok' : 'failed'} ·
-                required models {readiness.genx.required_models_ok ? 'ok' : 'failed'}
-              </div>
-            )}
-            {!readiness.go_live_ready && (
-              <div className="text-sm text-amber-700">
-                Missing required: {readiness.missing_required.join(', ') || 'none'}
-              </div>
-            )}
           </CardContent>
         </Card>
       )}
 
-      {/* Setup Wizard — shown when no keys added yet */}
-      {activeKeysCount === 0 && (
-        <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}>
-          <Card className="border-2 border-violet-200 bg-gradient-to-br from-violet-50 to-indigo-50">
-            <CardContent className="p-6">
-              <div className="flex items-center gap-2 mb-3">
-                <Sparkles className="w-5 h-5 text-violet-600" />
-                <h3 className="font-semibold text-violet-900">Setup Guide — Get Started in 3 Steps</h3>
-              </div>
-              <div className="space-y-3">
-                {[
-                  {
-                    step: '1',
-                    icon: Key,
-                    title: 'Add GenX API Key (Primary AI Provider)',
-                    desc: 'Required for AI content generation. Add your GenX key to enable all AI features.',
-                    link: '#',
-                    done: apiKeys.some(k => k.key_name === 'GENX_API_KEY' && k.is_active),
-                  },
-                  {
-                    step: '2',
-                    icon: Globe,
-                    title: 'Add Firecrawl API Key (Web Scraping)',
-                    desc: 'Required for website scraping and competitive research. Get your key at firecrawl.dev.',
-                    link: '#',
-                    done: apiKeys.some(k => k.key_name === 'FIRECRAWL_API_KEY' && k.is_active),
-                  },
-                  {
-                    step: '3',
-                    icon: Settings,
-                    title: 'Connect your social media accounts',
-                    desc: `Go to the Platforms page to connect all ${PLATFORM_COUNT} social accounts via OAuth.`,
-                    link: '/dashboard/platforms',
-                    done: integrations.some(i => i.is_connected),
-                  },
-                ].map((item) => (
-                  <div key={item.step} className="flex items-start gap-3">
-                    <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 mt-0.5 ${item.done ? 'bg-green-500 text-white' : 'bg-violet-200 text-violet-700'}`}>
-                      {item.done ? <CheckCircle2 className="w-4 h-4" /> : item.step}
-                    </div>
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2">
-                        <p className={`text-sm font-medium ${item.done ? 'line-through text-gray-400' : 'text-gray-800'}`}>
-                          {item.title}
-                        </p>
-                        {item.done && <span className="text-xs text-green-600 font-medium">Done</span>}
-                      </div>
-                      <p className="text-xs text-gray-500 mt-0.5">{item.desc}</p>
-                    </div>
-                    {!item.done && (
-                      <a href={item.link} target={item.link.startsWith('http') ? '_blank' : undefined} rel="noreferrer">
-                        <ChevronRight className="w-4 h-4 text-violet-500" />
-                      </a>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        </motion.div>
-      )}
-
-      {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-500">Active API Keys</p>
-                <p className="text-2xl font-bold">{activeKeysCount}</p>
-              </div>
-              <div className="p-3 bg-blue-100 rounded-lg">
-                <Key className="w-5 h-5 text-blue-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-500">Connected Platforms</p>
-                <p className="text-2xl font-bold">{connectedPlatformsCount}/{PLATFORM_COUNT}</p>
-              </div>
-              <div className="p-3 bg-green-100 rounded-lg">
-                <Check className="w-5 h-5 text-green-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-500">Auto-Posting</p>
-                <p className="text-2xl font-bold">
-                  {integrations.filter(i => i.auto_post_enabled).length}
-                </p>
-              </div>
-              <div className="p-3 bg-purple-100 rounded-lg">
-                <Settings className="w-5 h-5 text-purple-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* API Keys Section */}
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
-          <div>
-            <CardTitle className="flex items-center gap-2">
-              <Key className="w-5 h-5" />
-              Your API Keys
-            </CardTitle>
-            <CardDescription>
-              Configure your provider API keys. GenX and Firecrawl are required for full functionality.
-            </CardDescription>
-          </div>
-          <Button onClick={() => setShowAddKeyDialog(true)}>
-            <Plus className="w-4 h-4 mr-2" />
-            Add Key
-          </Button>
-        </CardHeader>
-        <CardContent>
-          {apiKeys.length === 0 ? (
-            <div className="text-center py-8 text-gray-500">
-              <Key className="w-12 h-12 mx-auto mb-4 text-gray-300" />
-              <p>No API keys added yet</p>
-              <p className="text-sm">Add GenX and Firecrawl keys to get started</p>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              <AnimatePresence>
-                {apiKeys.map((key) => {
-                  const keyInfo = AVAILABLE_API_KEYS.find(k => k.key === key.key_name);
-                  return (
-                    <motion.div
-                      key={key.id}
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, x: -20 }}
-                      className="flex items-center justify-between p-4 bg-gray-50 rounded-lg"
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className="p-2 bg-green-100 rounded-lg">
-                          <Check className="w-4 h-4 text-green-600" />
-                        </div>
-                        <div>
-                          <p className="font-medium">{keyInfo?.name || key.key_name}</p>
-                          <p className="text-sm text-gray-500">{keyInfo?.provider}</p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <Badge variant="outline" className="text-green-600 border-green-200 bg-green-50">
-                          Active
-                        </Badge>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleDeleteKey(key.id)}
-                        >
-                          <Trash2 className="w-4 h-4 text-red-500" />
-                        </Button>
-                      </div>
-                    </motion.div>
-                  );
-                })}
-              </AnimatePresence>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Platform Integrations */}
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <ExternalLink className="w-5 h-5" />
-            Social Platform Connections
-          </CardTitle>
+          <CardTitle>Provider API keys</CardTitle>
           <CardDescription>
-            Connect your social accounts to enable posting and engagement management
+            This is the only dashboard place to save user-level provider keys.
           </CardDescription>
         </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {PLATFORMS.map((platform) => {
-              const integration = integrations.find(i => i.platform === platform.id);
-              const isConnected = integration?.is_connected || false;
-
-              return (
-                <motion.div
-                  key={platform.id}
-                  whileHover={{ scale: 1.01 }}
-                  className={`p-4 rounded-lg border ${
-                    isConnected ? 'border-green-200 bg-green-50/50' : 'border-gray-200'
-                  }`}
-                >
-                  <div className="flex items-start justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className={`p-2 rounded-lg ${platform.bgColor}`}>
-                        <platform.icon className={`w-5 h-5 ${platform.color}`} />
-                      </div>
-                      <div>
-                        <p className="font-medium">{platform.name}</p>
-                        {isConnected && integration?.platform_username && (
-                          <p className="text-sm text-gray-500">@{integration.platform_username}</p>
-                        )}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {isConnected ? (
-                        <>
-                          <Badge className="bg-green-100 text-green-700">Connected</Badge>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleDisconnectPlatform(platform.id)}
-                          >
-                            <X className="w-4 h-4" />
-                          </Button>
-                        </>
-                      ) : (
-                        <Button
-                          size="sm"
-                          onClick={() => handleConnectPlatform(platform.id)}
-                        >
-                          Connect
-                        </Button>
-                      )}
-                    </div>
+        <CardContent className="space-y-4">
+          {apiKeys.user_keys.map((item) => (
+            <div key={item.key_name} className="rounded-lg border p-4">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div className="space-y-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-medium">{item.label}</span>
+                    <Badge className={statusTone[readiness?.provider_details?.[item.provider.toLowerCase()]?.status || (item.configured ? 'configured' : 'missing')] || statusTone.configured}>
+                      {readiness?.provider_details?.[item.provider.toLowerCase()]?.status || (item.configured ? 'configured' : 'missing')}
+                    </Badge>
+                    <Badge variant="outline">{item.required ? 'Required' : 'Optional fallback'}</Badge>
                   </div>
+                  <p className="text-sm text-gray-600">{item.description}</p>
+                  <p className="text-xs text-gray-500">
+                    Saved value: {item.masked || 'not saved'} • Effective source: {item.effective_source}
+                  </p>
+                </div>
 
-                  {isConnected && (
-                    <div className="mt-4 pt-4 border-t border-gray-200 space-y-3">
-                      <div className="flex items-center justify-between">
-                        <Label htmlFor={`${platform.id}-auto-post`} className="text-sm cursor-pointer">
-                          Auto-post after approval
-                        </Label>
-                        <Switch
-                          id={`${platform.id}-auto-post`}
-                          checked={integration?.auto_post_enabled || false}
-                          onCheckedChange={(checked) =>
-                            handleUpdateIntegration(platform.id, { auto_post_enabled: checked })
-                          }
-                        />
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <Label htmlFor={`${platform.id}-auto-reply`} className="text-sm cursor-pointer">
-                          Auto-reply to comments
-                        </Label>
-                        <Switch
-                          id={`${platform.id}-auto-reply`}
-                          checked={integration?.auto_reply_enabled || false}
-                          onCheckedChange={(checked) =>
-                            handleUpdateIntegration(platform.id, { auto_reply_enabled: checked })
-                          }
-                        />
-                      </div>
-                      {integration?.auto_reply_enabled && (
-                        <div className="flex items-center justify-between pl-4">
-                          <Label htmlFor={`${platform.id}-low-risk`} className="text-sm cursor-pointer text-gray-500">
-                            Only low-risk replies (thank-yous, etc.)
-                          </Label>
-                          <Switch
-                            id={`${platform.id}-low-risk`}
-                            checked={integration?.low_risk_auto_reply || false}
-                            onCheckedChange={(checked) =>
-                              handleUpdateIntegration(platform.id, { low_risk_auto_reply: checked })
-                            }
-                          />
-                        </div>
-                      )}
-                    </div>
+                <div className="flex w-full max-w-2xl flex-col gap-3 lg:flex-row">
+                  <div className="flex-1">
+                    <Label htmlFor={item.key_name} className="sr-only">{item.label}</Label>
+                    <Input
+                      id={item.key_name}
+                      value={drafts[item.key_name] || ''}
+                      onChange={(event) => setDrafts((prev) => ({ ...prev, [item.key_name]: event.target.value }))}
+                      placeholder={`Enter ${item.label}`}
+                    />
+                  </div>
+                  <Button onClick={() => saveKey(item.key_name)} disabled={savingKey === item.key_name}>
+                    {savingKey === item.key_name ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                    Save
+                  </Button>
+                  {(item.key_name === 'GENX_API_KEY' || item.key_name === 'FIRECRAWL_API_KEY') && (
+                    <Button variant="outline" onClick={() => testKey(item.key_name)} disabled={testingKey === item.key_name}>
+                      {testingKey === item.key_name ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                      Test
+                    </Button>
                   )}
-                </motion.div>
-              );
-            })}
-          </div>
+                </div>
+              </div>
+            </div>
+          ))}
         </CardContent>
       </Card>
 
-      {/* Add Key Dialog */}
-      <Dialog open={showAddKeyDialog} onOpenChange={setShowAddKeyDialog}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Add API Key</DialogTitle>
-            <DialogDescription>
-              Add your own API key to unlock premium AI capabilities
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div>
-              <Label>Provider</Label>
-              <Select value={selectedKeyType} onValueChange={setSelectedKeyType}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select provider" />
-                </SelectTrigger>
-                <SelectContent>
-                  {AVAILABLE_API_KEYS.map((key) => (
-                    <SelectItem key={key.key} value={key.key}>
-                      <div className="flex flex-col">
-                        <span>{key.name}</span>
-                        <span className="text-xs text-gray-500">{key.description}</span>
-                      </div>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label>API Key</Label>
-              <div className="relative">
-                <Input
-                  type={showKeyValue ? 'text' : 'password'}
-                  value={keyValue}
-                  onChange={(e) => setKeyValue(e.target.value)}
-                  placeholder="Enter your API key"
-                />
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="absolute right-2 top-1/2 -translate-y-1/2"
-                  onClick={() => setShowKeyValue(!showKeyValue)}
-                >
-                  {showKeyValue ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </Button>
+      <Card>
+        <CardHeader>
+          <CardTitle>Global runtime configuration</CardTitle>
+          <CardDescription>
+            These values come from the backend environment. They are shown separately from your encrypted user keys.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {Object.entries(globalKeyGroups).map(([group, items]) => (
+            <div key={group} className="space-y-2">
+              <h3 className="text-sm font-semibold">{group}</h3>
+              <div className="grid gap-2 md:grid-cols-2">
+                {items.map((item) => (
+                  <div key={item.key_name} className="rounded-lg border p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-sm font-medium">{item.label}</span>
+                      <Badge className={item.configured ? statusTone.configured : statusTone.missing}>
+                        {item.configured ? 'configured' : 'not_configured'}
+                      </Badge>
+                    </div>
+                    <p className="mt-1 text-xs text-gray-600">{item.masked || 'not configured'}</p>
+                  </div>
+                ))}
               </div>
             </div>
-            <div className="flex items-start gap-2 p-3 bg-amber-50 rounded-lg">
-              <AlertCircle className="w-4 h-4 text-amber-600 mt-0.5" />
-              <p className="text-sm text-amber-700">
-                Your API key is encrypted and stored securely. It will only be used for your content generation.
-              </p>
-            </div>
-            <div className="flex justify-end gap-3">
-              <Button variant="outline" onClick={() => setShowAddKeyDialog(false)}>
-                Cancel
-              </Button>
-              <Button onClick={handleAddKey} disabled={isSaving}>
-                {isSaving ? <RefreshCw className="w-4 h-4 animate-spin" /> : 'Save Key'}
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
+          ))}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Social platform OAuth</CardTitle>
+          <CardDescription>
+            Connect, reconnect, or disconnect platforms here. Posting stays blocked until the OAuth connection and required scopes are valid.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {PLATFORMS.map((platform) => {
+            const Icon = platform.icon;
+            const integration = integrations.find((item) => item.platform === platform.id);
+            const posting = readiness?.social_platforms?.[platform.id];
+            const canPost = posting?.can_post_now ?? false;
+            const busy = updatingPlatform === platform.id;
+
+            return (
+              <div key={platform.id} className="rounded-lg border p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className="rounded-lg bg-slate-100 p-2">
+                      <Icon className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <div className="font-medium">{platform.name}</div>
+                      <div className="text-xs text-gray-500">
+                        {integration?.platform_username || 'No account connected'}
+                      </div>
+                    </div>
+                  </div>
+                  <Badge className={canPost ? statusTone.test_passed : statusTone.missing}>
+                    {posting?.ui_status || (integration?.is_connected ? 'Connected' : 'Needs connection')}
+                  </Badge>
+                </div>
+
+                <div className="mt-3 space-y-2 text-xs text-gray-600">
+                  <p>
+                    OAuth env: {readiness?.oauth?.[platform.id] || 'not_configured'}
+                  </p>
+                  {posting?.missing?.length ? (
+                    <p>Blocked by: {posting.missing.join(', ')}</p>
+                  ) : (
+                    <p>{canPost ? 'Posting is allowed for this platform.' : 'Posting is blocked until OAuth is valid.'}</p>
+                  )}
+                </div>
+
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <Button
+                    size="sm"
+                    onClick={() => handleConnectPlatform(platform.id)}
+                    disabled={busy}
+                  >
+                    {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ExternalLink className="mr-2 h-4 w-4" />}
+                    {integration?.is_connected ? 'Reconnect' : 'Connect'}
+                  </Button>
+                  {integration?.is_connected && (
+                    <Button size="sm" variant="outline" onClick={() => handleDisconnectPlatform(platform.id)} disabled={busy}>
+                      Disconnect
+                    </Button>
+                  )}
+                </div>
+
+                {integration?.is_connected && (
+                  <div className="mt-4 space-y-3 border-t pt-4">
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor={`${platform.id}-autopost`}>Enable auto-post</Label>
+                      <Switch
+                        id={`${platform.id}-autopost`}
+                        checked={integration.auto_post_enabled}
+                        onCheckedChange={(checked) => handleUpdateIntegration(platform.id, { auto_post_enabled: checked })}
+                      />
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor={`${platform.id}-autoreply`}>Enable auto-reply</Label>
+                      <Switch
+                        id={`${platform.id}-autoreply`}
+                        checked={integration.auto_reply_enabled}
+                        onCheckedChange={(checked) => handleUpdateIntegration(platform.id, { auto_reply_enabled: checked })}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </CardContent>
+      </Card>
+
+      {readiness?.go_live_ready ? (
+        <div className="flex items-center gap-2 rounded-lg border border-green-200 bg-green-50 p-4 text-green-800">
+          <CheckCircle2 className="h-5 w-5" />
+          Required providers are ready. Unsupported posting still remains blocked until each platform shows a valid posting status.
+        </div>
+      ) : null}
     </div>
   );
 }

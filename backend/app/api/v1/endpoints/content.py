@@ -23,60 +23,34 @@ from app.models.content import Content as ContentModel, ContentStatus
 from app.models.user import User
 from app.schemas.content import Content, ContentUpdate
 from app.services.social_rules import get_social_rule, resolve_platform_key
+from app.services.provider_catalog import resolve_user_api_key
 
 router = APIRouter()
 
 
 def _get_hf_token(db: Session, user: User) -> str | None:
     from app.core.config import settings
-    from app.models.user_api_key import UserAPIKey
-    row = db.query(UserAPIKey).filter(
-        UserAPIKey.user_id == user.id,
-        UserAPIKey.key_name == "HUGGINGFACE_TOKEN",
-        UserAPIKey.is_active == True,
-    ).first()
-    if row:
-        return row.get_decrypted_key()
-    return settings.HUGGINGFACE_TOKEN or None
+    return resolve_user_api_key(db, user.id, "HUGGINGFACE_TOKEN", settings.HUGGINGFACE_TOKEN) or None
 
 
 def _get_qwen_key(db: Session, user: User) -> str | None:
     from app.core.config import settings
-    from app.models.user_api_key import UserAPIKey
-    row = db.query(UserAPIKey).filter(
-        UserAPIKey.user_id == user.id,
-        UserAPIKey.key_name == "QWEN_API_KEY",
-        UserAPIKey.is_active == True,
-    ).first()
-    if row:
-        return row.get_decrypted_key()
-    return settings.QWEN_API_KEY or None
+    return resolve_user_api_key(db, user.id, "QWEN_API_KEY", settings.QWEN_API_KEY) or None
 
 
 def _get_openai_key(db: Session, user: User) -> str | None:
     from app.core.config import settings
-    from app.models.user_api_key import UserAPIKey
-    row = db.query(UserAPIKey).filter(
-        UserAPIKey.user_id == user.id,
-        UserAPIKey.key_name == "OPENAI_API_KEY",
-        UserAPIKey.is_active == True,
-    ).first()
-    if row:
-        return row.get_decrypted_key()
-    return settings.OPENAI_API_KEY or None
+    return resolve_user_api_key(db, user.id, "OPENAI_API_KEY", settings.OPENAI_API_KEY) or None
 
 
 def _get_genx_key(db: Session, user: User) -> str | None:
     from app.core.config import settings
-    from app.models.user_api_key import UserAPIKey
-    row = db.query(UserAPIKey).filter(
-        UserAPIKey.user_id == user.id,
-        UserAPIKey.key_name == "GENX_API_KEY",
-        UserAPIKey.is_active == True,
-    ).first()
-    if row:
-        return row.get_decrypted_key()
-    return settings.GENX_API_KEY or None
+    return resolve_user_api_key(db, user.id, "GENX_API_KEY", settings.GENX_API_KEY) or None
+
+
+def _get_firecrawl_key(db: Session, user: User) -> str | None:
+    from app.core.config import settings
+    return resolve_user_api_key(db, user.id, "FIRECRAWL_API_KEY", settings.FIRECRAWL_API_KEY) or None
 
 
 async def _generate_text_content(
@@ -208,6 +182,7 @@ async def generate_content(
     openai_key = _get_openai_key(db, current_user)
     qwen_key = _get_qwen_key(db, current_user)
     genx_key = _get_genx_key(db, current_user)
+    firecrawl_key = _get_firecrawl_key(db, current_user)
 
     webapp_data = {
         "name": webapp.name,
@@ -281,7 +256,7 @@ async def generate_all_content(
     for webapp in webapps[:2]:
         live_description = webapp.description or ""
         try:
-            scraped = await scrape_page(str(webapp.url), timeout=15)
+            scraped = await scrape_page(str(webapp.url), timeout=15, firecrawl_api_key=firecrawl_key)
             if scraped and not scraped.error and scraped.full_text:
                 live_description = scraped.full_text[:1200]
         except Exception:

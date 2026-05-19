@@ -153,7 +153,6 @@ class GenXClient:
             return None
         headers = {
             "Authorization": f"Bearer {self.api_key}",
-            "X-API-Key": self.api_key,
             "Content-Type": "application/json",
         }
         endpoint = self._endpoint()
@@ -222,7 +221,6 @@ class GenXClient:
             return {"ok": False, "source": "not_configured", "models": [], "error": "GenX API key/base URL not configured."}
         headers = {
             "Authorization": f"Bearer {self.api_key}",
-            "X-API-Key": self.api_key,
             "Content-Type": "application/json",
         }
         for endpoint in self._models_endpoint_candidates():
