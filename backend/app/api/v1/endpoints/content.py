@@ -176,8 +176,16 @@ async def generate_content(
     result = await _generate_text_content(webapp_data, platform, hf_token, openai_key, qwen_key, genx_key)
     media_urls = await get_media_url(platform, webapp_data, qwen_key or hf_token)
     content_type = "video" if platform in VIDEO_PLATFORMS else "image"
-    # Determine whether AI generation was used (internal flag, not exposed to users)
+    # Truthful generation status for go-live readiness
+    genx_configured = bool(genx_key)
     ai_used = not result.get("_generation_error") and bool(genx_key or qwen_key or hf_token)
+    generation_status = "configured" if genx_configured else "not_configured"
+    generation_message = (
+        "GENX configured: live AI generation enabled."
+        if genx_configured
+        else "GENX_API_KEY is not configured. Generated output uses degraded fallback guidance; configure GENX for production-quality AI generation."
+    )
+    provider_name = "genx" if genx_key else ("qwen" if qwen_key else ("huggingface" if hf_token else "template"))
 
     db_content = ContentModel(
         id=str(uuid.uuid4()),
@@ -192,6 +200,10 @@ async def generate_content(
         media_urls=media_urls,
         generation_metadata={
             "ai_generated": ai_used,
+            "generation_status": generation_status,
+            "provider": provider_name,
+            "message": generation_message,
+            "requires": [] if genx_configured else ["GENX_API_KEY"],
         },
     )
     db.add(db_content)
@@ -246,6 +258,7 @@ async def generate_all_content(
         }
 
         active_token = genx_key or qwen_key or hf_token
+        generation_status = "configured" if genx_key else "not_configured"
         if active_token:
             try:
                 from app.services.ai_provider import AIProvider
@@ -279,7 +292,13 @@ async def generate_all_content(
                 caption=content_dict.get("caption", ""),
                 hashtags=content_dict.get("hashtags", []),
                 media_urls=media_urls,
-                generation_metadata={"source": "manual_batch", "ai_generated": ai_used},
+                generation_metadata={
+                    "source": "manual_batch",
+                    "ai_generated": ai_used,
+                    "generation_status": generation_status,
+                    "provider": generator_name,
+                    "message": "GENX configured: live AI generation enabled." if genx_key else "GENX_API_KEY is missing; batch generation is running in degraded mode.",
+                },
             )
             db.add(db_content)
             created.append(db_content)
@@ -290,6 +309,9 @@ async def generate_all_content(
         "count": len(created),
         "platforms": platforms,
         "generator": generator_name,
+        "generation_status": "configured" if genx_key else "not_configured",
+        "degraded": not bool(genx_key),
+        "degraded_reason": None if genx_key else "GENX_API_KEY missing; configure GenX for full production quality output.",
     }
 
 

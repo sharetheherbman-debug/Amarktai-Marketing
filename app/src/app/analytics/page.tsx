@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
-import { TrendingUp, Eye, Heart, MousePointer, Download } from 'lucide-react';
+import { TrendingUp, Eye, Heart, MousePointer, Download, Upload, Brain } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import type { AnalyticsSummary } from '@/types';
 import { analyticsApi } from '@/lib/api';
+import { toast } from 'sonner';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
 
 const platformColors: Record<string, string> = {
@@ -21,6 +22,8 @@ export default function AnalyticsPage() {
   const [analytics, setAnalytics] = useState<AnalyticsSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [timeRange, setTimeRange] = useState('7d');
+  const [csvFile, setCsvFile] = useState<File | null>(null);
+  const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
     fetchAnalytics();
@@ -30,10 +33,28 @@ export default function AnalyticsPage() {
     try {
       const data = await analyticsApi.getSummary();
       setAnalytics(data);
-    } catch (error) {
+    } catch {
       console.error('Failed to load analytics');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleUploadCsv = async () => {
+    if (!csvFile) {
+      toast.error('Select a CSV file first.');
+      return;
+    }
+    setUploading(true);
+    try {
+      const result = await analyticsApi.importMetricsCsv(csvFile);
+      toast.success(`Imported ${result.imported} metric rows.`);
+      setCsvFile(null);
+      await fetchAnalytics();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'CSV import failed');
+    } finally {
+      setUploading(false);
     }
   };
 
@@ -87,14 +108,17 @@ export default function AnalyticsPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h2 className="text-2xl font-bold">Analytics</h2>
           <p className="text-gray-500">Track your social media performance</p>
         </div>
         <div className="flex items-center space-x-3">
-          <select 
+          <Badge variant={analytics?.learningActive ? 'default' : 'outline'}>
+            <Brain className="w-3 h-3 mr-1" />
+            {analytics?.learningActive ? 'Learning active' : 'Learning inactive'}
+          </Badge>
+          <select
             value={timeRange}
             onChange={(e) => setTimeRange(e.target.value)}
             className="border rounded-lg px-3 py-2 text-sm"
@@ -110,7 +134,31 @@ export default function AnalyticsPage() {
         </div>
       </div>
 
-      {/* Stats Grid */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Learning Inputs</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-sm text-gray-500">
+            Import platform metrics by CSV when direct social APIs are not connected.
+            Fields: platform, impressions, reach, clicks, likes, comments, shares, saves, conversions.
+          </p>
+          <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
+            <input
+              type="file"
+              accept=".csv"
+              onChange={(e) => setCsvFile(e.target.files?.[0] || null)}
+              className="text-sm"
+            />
+            <Button onClick={handleUploadCsv} disabled={uploading || !csvFile}>
+              <Upload className="w-4 h-4 mr-2" />
+              {uploading ? 'Importing…' : 'Import CSV'}
+            </Button>
+            <Badge variant="outline">Records: {analytics?.metricsRecords ?? 0}</Badge>
+          </div>
+        </CardContent>
+      </Card>
+
       <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {statsCards.map((stat) => (
           <Card key={stat.title}>
@@ -129,7 +177,6 @@ export default function AnalyticsPage() {
         ))}
       </div>
 
-      {/* Charts */}
       <Tabs defaultValue="overview">
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
@@ -147,22 +194,10 @@ export default function AnalyticsPage() {
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={analytics?.dailyStats || []}>
                     <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis 
-                      dataKey="date" 
-                      tickFormatter={(date) => new Date(date).toLocaleDateString('en', { month: 'short', day: 'numeric' })}
-                    />
+                    <XAxis dataKey="date" />
                     <YAxis />
-                    <Tooltip 
-                      formatter={(value: number) => value.toLocaleString()}
-                      labelFormatter={(label) => new Date(label).toLocaleDateString()}
-                    />
-                    <Line 
-                      type="monotone" 
-                      dataKey="views" 
-                      stroke="#7c3aed" 
-                      strokeWidth={2}
-                      dot={false}
-                    />
+                    <Tooltip formatter={(value: number) => value.toLocaleString()} />
+                    <Line type="monotone" dataKey="views" stroke="#7c3aed" strokeWidth={2} dot={false} />
                   </LineChart>
                 </ResponsiveContainer>
               </div>
@@ -178,22 +213,10 @@ export default function AnalyticsPage() {
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={analytics?.dailyStats || []}>
                     <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis 
-                      dataKey="date" 
-                      tickFormatter={(date) => new Date(date).toLocaleDateString('en', { month: 'short', day: 'numeric' })}
-                    />
+                    <XAxis dataKey="date" />
                     <YAxis />
-                    <Tooltip 
-                      formatter={(value: number) => value.toLocaleString()}
-                      labelFormatter={(label) => new Date(label).toLocaleDateString()}
-                    />
-                    <Line 
-                      type="monotone" 
-                      dataKey="engagement" 
-                      stroke="#ec4899" 
-                      strokeWidth={2}
-                      dot={false}
-                    />
+                    <Tooltip formatter={(value: number) => value.toLocaleString()} />
+                    <Line type="monotone" dataKey="engagement" stroke="#ec4899" strokeWidth={2} dot={false} />
                   </LineChart>
                 </ResponsiveContainer>
               </div>
@@ -209,7 +232,7 @@ export default function AnalyticsPage() {
             <CardContent>
               <div className="h-80">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart 
+                  <BarChart
                     data={analytics ? Object.entries(analytics.platformBreakdown).map(([platform, stats]) => ({
                       platform,
                       views: stats.views,
@@ -228,7 +251,6 @@ export default function AnalyticsPage() {
             </CardContent>
           </Card>
 
-          {/* Platform Breakdown Table */}
           <Card>
             <CardHeader>
               <CardTitle>Platform Breakdown</CardTitle>
@@ -250,19 +272,14 @@ export default function AnalyticsPage() {
                       <tr key={platform} className="border-b last:border-0">
                         <td className="py-3 px-4">
                           <div className="flex items-center">
-                            <div 
-                              className="w-3 h-3 rounded-full mr-2"
-                              style={{ backgroundColor: platformColors[platform] }}
-                            />
+                            <div className="w-3 h-3 rounded-full mr-2" style={{ backgroundColor: platformColors[platform] }} />
                             <span className="capitalize font-medium">{platform}</span>
                           </div>
                         </td>
                         <td className="text-right py-3 px-4">{stats.posts}</td>
                         <td className="text-right py-3 px-4">{stats.views.toLocaleString()}</td>
                         <td className="text-right py-3 px-4">{stats.engagement.toLocaleString()}</td>
-                        <td className="text-right py-3 px-4">
-                          <Badge variant="outline">{stats.ctr}%</Badge>
-                        </td>
+                        <td className="text-right py-3 px-4"><Badge variant="outline">{stats.ctr}%</Badge></td>
                       </tr>
                     ))}
                   </tbody>
@@ -286,9 +303,7 @@ export default function AnalyticsPage() {
                   <p className="text-gray-600 mt-1">Engagement Rate</p>
                 </div>
                 <div className="text-center p-6 bg-pink-50 rounded-lg">
-                  <p className="text-3xl font-bold text-pink-600">
-                    {analytics?.avgCtr || 0}%
-                  </p>
+                  <p className="text-3xl font-bold text-pink-600">{analytics?.avgCtr || 0}%</p>
                   <p className="text-gray-600 mt-1">Average CTR</p>
                 </div>
                 <div className="text-center p-6 bg-green-50 rounded-lg">

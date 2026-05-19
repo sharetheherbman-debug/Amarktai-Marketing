@@ -38,6 +38,8 @@ interface GeneratedAsset {
   title?: string;
   caption?: string;
   errorMessage?: string;
+  generationStatus?: string;
+  generationMessage?: string;
 }
 
 export function ContentStudio() {
@@ -91,6 +93,8 @@ export function ContentStudio() {
                 content: result.caption,
                 title: result.title,
                 caption: result.caption,
+                generationStatus: String(result.generationMetadata?.generation_status || "configured"),
+                generationMessage: typeof result.generationMetadata?.message === "string" ? result.generationMetadata?.message : undefined,
               }
             : asset
         )
@@ -302,6 +306,9 @@ export function ContentStudio() {
                               <h4 className="font-medium text-slate-200 mb-2">{asset.title}</h4>
                             )}
                             <p className="text-sm text-slate-300 line-clamp-4">{asset.caption || asset.content}</p>
+                            {asset.generationStatus === 'not_configured' && (
+                              <p className="text-xs text-amber-300 mt-2">{asset.generationMessage || 'GENX_API_KEY is not configured. Output is degraded.'}</p>
+                            )}
                           </div>
                         )}
                       </div>

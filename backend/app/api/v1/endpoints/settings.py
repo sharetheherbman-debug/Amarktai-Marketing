@@ -10,6 +10,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from sqlalchemy import text as sql_text
 
 from app.api.deps import get_current_user
 from app.db.session import get_db
@@ -194,4 +195,80 @@ async def get_billing(
         "quota_used": used,
         "quota_limit": limit,
         "quota_remaining": max(0, limit - used),
+    }
+
+
+def _provider_state(configured: bool) -> str:
+    return "configured" if configured else "not_configured"
+
+
+def _is_oauth_configured(client_id: str | None, client_secret: str | None) -> bool:
+    return bool((client_id or "").strip() and (client_secret or "").strip())
+
+
+@router.get("/readiness")
+async def get_readiness(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    from app.core.config import settings
+
+    rows = db.query(UserAPIKey).filter(
+        UserAPIKey.user_id == current_user.id,
+        UserAPIKey.is_active == True,
+    ).all()
+    user_keys = {r.key_name for r in rows}
+
+    genx_configured = bool(settings.GENX_API_KEY or "GENX_API_KEY" in user_keys)
+    firecrawl_configured = bool(settings.FIRECRAWL_API_KEY or "FIRECRAWL_API_KEY" in user_keys)
+    email_configured = bool(settings.RESEND_API_KEY)
+    stripe_configured = bool(settings.STRIPE_SECRET_KEY and settings.STRIPE_WEBHOOK_SECRET)
+
+    oauth_states = {
+        "youtube": _provider_state(_is_oauth_configured(settings.YOUTUBE_CLIENT_ID, settings.YOUTUBE_CLIENT_SECRET)),
+        "tiktok": _provider_state(_is_oauth_configured(settings.TIKTOK_CLIENT_KEY, settings.TIKTOK_CLIENT_SECRET)),
+        "facebook": _provider_state(_is_oauth_configured(settings.META_APP_ID, settings.META_APP_SECRET)),
+        "instagram": _provider_state(_is_oauth_configured(settings.META_APP_ID, settings.META_APP_SECRET)),
+        "twitter": _provider_state(_is_oauth_configured(settings.TWITTER_CLIENT_ID, settings.TWITTER_CLIENT_SECRET)),
+        "linkedin": _provider_state(_is_oauth_configured(settings.LINKEDIN_CLIENT_ID, settings.LINKEDIN_CLIENT_SECRET)),
+        "pinterest": _provider_state(_is_oauth_configured(settings.PINTEREST_CLIENT_ID, settings.PINTEREST_CLIENT_SECRET)),
+        "reddit": _provider_state(_is_oauth_configured(settings.REDDIT_CLIENT_ID, settings.REDDIT_CLIENT_SECRET)),
+        "snapchat": _provider_state(_is_oauth_configured(settings.SNAPCHAT_CLIENT_ID, settings.SNAPCHAT_CLIENT_SECRET)),
+    }
+
+    db_state = "not_configured"
+    try:
+        db.execute(sql_text("SELECT 1"))
+        db_state = "configured"
+    except Exception:
+        db_state = "not_configured"
+
+    celery_state = _provider_state(bool(settings.REDIS_URL))
+
+    providers = {
+        "genx": _provider_state(genx_configured),
+        "firecrawl": _provider_state(firecrawl_configured),
+        "email": _provider_state(email_configured),
+        "stripe": _provider_state(stripe_configured),
+        "database": db_state,
+        "scheduler_celery": celery_state,
+    }
+
+    checklist = [
+        {"key": "genx", "label": "GenX AI provider", "status": providers["genx"], "required": True},
+        {"key": "firecrawl", "label": "Firecrawl/scraper intelligence", "status": providers["firecrawl"], "required": False},
+        {"key": "database", "label": "Database health", "status": providers["database"], "required": True},
+        {"key": "scheduler_celery", "label": "Scheduler/Celery", "status": providers["scheduler_celery"], "required": False},
+        {"key": "email", "label": "Email provider", "status": providers["email"], "required": False},
+        {"key": "stripe", "label": "Stripe billing", "status": providers["stripe"], "required": False},
+    ]
+
+    missing_required = [c["label"] for c in checklist if c["required"] and c["status"] != "configured"]
+
+    return {
+        "providers": providers,
+        "oauth": oauth_states,
+        "checklist": checklist,
+        "missing_required": missing_required,
+        "go_live_ready": len(missing_required) == 0,
     }

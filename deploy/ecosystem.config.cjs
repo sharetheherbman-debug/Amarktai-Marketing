@@ -9,9 +9,9 @@ module.exports = {
     // ── FastAPI backend ────────────────────────────────────────────────────
     {
       name: "amarktai-marketing-api",
-      cwd: "/var/www/amarktai-marketing/backend",
+      cwd: "/var/www/amarktai-marketing/repo/backend",
       script: ".venv/bin/uvicorn",
-      args: "app.main:app --host 127.0.0.1 --port 8000 --workers 2",
+      args: "app.main:app --host 127.0.0.1 --port 8010 --workers 2",
       interpreter: "none",
       env: {
         NODE_ENV: "production",
@@ -29,7 +29,7 @@ module.exports = {
     // ── Celery worker ──────────────────────────────────────────────────────
     {
       name: "amarktai-marketing-worker",
-      cwd: "/var/www/amarktai-marketing/backend",
+      cwd: "/var/www/amarktai-marketing/repo/backend",
       script: ".venv/bin/celery",
       args: "-A app.workers.celery_app worker --loglevel=info --concurrency=2",
       interpreter: "none",
@@ -45,7 +45,7 @@ module.exports = {
     // ── Celery Beat (scheduler) ────────────────────────────────────────────
     {
       name: "amarktai-marketing-beat",
-      cwd: "/var/www/amarktai-marketing/backend",
+      cwd: "/var/www/amarktai-marketing/repo/backend",
       script: ".venv/bin/celery",
       args: "-A app.workers.celery_app beat --loglevel=info",
       interpreter: "none",

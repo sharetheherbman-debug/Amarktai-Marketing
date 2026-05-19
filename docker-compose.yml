@@ -1,3 +1,5 @@
+name: amarktai_marketing
+
 services:
   # Shared-VPS production model:
   # - Host Nginx owns public :80/:443 for all apps
@@ -42,8 +44,8 @@ services:
     environment:
       DATABASE_URL: postgresql://amarktai:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the repo root .env or shell environment}@db:5432/amarktai
       REDIS_URL: redis://redis:6379/0
-      FRONTEND_URL: https://${DOMAIN:-builder.amarktai.com}
-      CORS_ORIGINS: '["https://${DOMAIN:-builder.amarktai.com}"]'
+      FRONTEND_URL: https://${DOMAIN:-marketing.amarktai.com}
+      CORS_ORIGINS: '["https://${DOMAIN:-marketing.amarktai.com}"]'
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
@@ -57,7 +59,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "curl -fsS -H 'Host: ${DOMAIN:-builder.amarktai.com}' http://127.0.0.1:8000/health || exit 1",
+          "curl -fsS -H 'Host: ${DOMAIN:-marketing.amarktai.com}' http://127.0.0.1:8000/health || exit 1",
         ]
       interval: 30s
       timeout: 10s

@@ -21,6 +21,8 @@ class AnalyticsSummary(BaseModel):
     avg_ctr: float = 0.0
     platform_breakdown: Dict[str, PlatformStats] = {}
     daily_stats: List[DailyStat] = []
+    learning_active: bool = False
+    metrics_records: int = 0
 
 class Analytics(BaseModel):
     id: str

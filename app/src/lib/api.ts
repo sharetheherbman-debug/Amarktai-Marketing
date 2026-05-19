@@ -119,6 +119,7 @@ function mapContent(raw: Record<string, unknown>): Content {
     scheduledFor: c.scheduledFor as string | undefined,
     postedAt: c.postedAt as string | undefined,
     performance,
+    generationMetadata: (c.generationMetadata as Record<string, unknown>) ?? undefined,
     createdAt: c.createdAt as string,
     updatedAt: (c.updatedAt as string) ?? c.createdAt as string,
   };
@@ -336,6 +337,8 @@ function mapAnalyticsSummary(raw: Record<string, unknown>): AnalyticsSummary {
     avgCtr: (raw.avg_ctr as number) ?? 0,
     platformBreakdown: platformBreakdown as Record<Platform, PlatformStats>,
     dailyStats,
+    learningActive: (raw.learning_active as boolean) ?? false,
+    metricsRecords: (raw.metrics_records as number) ?? 0,
   };
 }
 
@@ -350,6 +353,46 @@ export const analyticsApi = {
   ): Promise<AnalyticsSummary['platformBreakdown'][Platform]> => {
     return apiFetch(`/analytics/platform/${platform}`);
   },
+
+  upsertManualMetrics: async (payload: {
+    content_id?: string;
+    platform: string;
+    metric_date?: string;
+    impressions: number;
+    reach: number;
+    clicks: number;
+    likes: number;
+    comments: number;
+    shares: number;
+    saves: number;
+    conversions: number;
+  }) => {
+    return apiFetch('/analytics/manual-metrics', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  importMetricsCsv: async (file: File): Promise<{ ok: boolean; imported: number; learning_active: boolean }> => {
+    const token = getStoredToken();
+    const formData = new FormData();
+    formData.append('file', file);
+    const res = await fetch(`${BASE}/analytics/import-csv`, {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: formData,
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => res.statusText);
+      throw new Error(`API ${res.status}: ${detail}`);
+    }
+    return res.json();
+  },
+
+  getLearningStatus: async (): Promise<{ learning_active: boolean; metrics_records: number; message: string }> => {
+    return apiFetch('/analytics/learning-status');
+  },
+
 };
 
 // ─── Leads ───────────────────────────────────────────────────────────────────
