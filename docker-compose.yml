@@ -1,6 +1,7 @@
-version: '3.8'
-
 services:
+  # Shared-VPS production model:
+  # - Host Nginx owns public :80/:443 for all apps
+  # - Docker only exposes app-specific localhost ports
   # ─── PostgreSQL Database ─────────────────────────────────────────────────────
   db:
     image: postgres:15-alpine
@@ -8,11 +9,9 @@ services:
     environment:
       POSTGRES_DB: amarktai
       POSTGRES_USER: amarktai
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the repo root .env or shell environment}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U amarktai"]
       interval: 10s
@@ -24,8 +23,6 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
-    ports:
-      - "6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -43,11 +40,12 @@ services:
     env_file:
       - ./backend/.env
     environment:
-      DATABASE_URL: postgresql://amarktai:${POSTGRES_PASSWORD:-changeme}@db:5432/amarktai
-      REDIS_URL: redis://redis:6379
-      CORS_ORIGINS: '["http://localhost:3000","http://localhost:5173","https://${DOMAIN:-localhost}","https://marketing.amarktai.com"]'
+      DATABASE_URL: postgresql://amarktai:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the repo root .env or shell environment}@db:5432/amarktai
+      REDIS_URL: redis://redis:6379/0
+      FRONTEND_URL: https://${DOMAIN:-builder.amarktai.com}
+      CORS_ORIGINS: '["https://${DOMAIN:-builder.amarktai.com}"]'
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     depends_on:
       db:
         condition: service_healthy
@@ -56,7 +54,11 @@ services:
     volumes:
       - media_uploads:/app/uploads
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS -H 'Host: ${DOMAIN:-builder.amarktai.com}' http://127.0.0.1:8000/health || exit 1",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -71,8 +73,8 @@ services:
     env_file:
       - ./backend/.env
     environment:
-      DATABASE_URL: postgresql://amarktai:${POSTGRES_PASSWORD:-changeme}@db:5432/amarktai
-      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgresql://amarktai:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the repo root .env or shell environment}@db:5432/amarktai
+      REDIS_URL: redis://redis:6379/0
     depends_on:
       db:
         condition: service_healthy
@@ -91,8 +93,8 @@ services:
     env_file:
       - ./backend/.env
     environment:
-      DATABASE_URL: postgresql://amarktai:${POSTGRES_PASSWORD:-changeme}@db:5432/amarktai
-      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgresql://amarktai:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the repo root .env or shell environment}@db:5432/amarktai
+      REDIS_URL: redis://redis:6379/0
     depends_on:
       db:
         condition: service_healthy
@@ -105,57 +107,14 @@ services:
       context: ./app
       dockerfile: ../Dockerfile.frontend
       args:
-        VITE_API_URL: ${VITE_API_URL:-}
+        VITE_API_URL: ${VITE_API_URL:-/api/v1}
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     depends_on:
       - backend
-
-  # ─── Nginx Reverse Proxy ─────────────────────────────────────────────────────
-  nginx:
-    image: nginx:alpine
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - ssl_certs:/etc/letsencrypt:ro
-      - certbot_webroot:/var/www/certbot:ro
-    depends_on:
-      - backend
-      - frontend
-
-  # ─── Certbot (SSL) ───────────────────────────────────────────────────────────
-  certbot:
-    image: certbot/certbot:latest
-    profiles:
-      - ssl
-    volumes:
-      - ssl_certs:/etc/letsencrypt
-      - certbot_webroot:/var/www/certbot
-    command: >
-      certonly --webroot --webroot-path /var/www/certbot
-      --email ${ADMIN_EMAIL:-admin@example.com}
-      --agree-tos --no-eff-email
-      -d ${DOMAIN:-marketing.amarktai.com}
-
-  # ─── Certbot Renewal (runs daily) ──────────────────────────────────────────
-  certbot-renew:
-    image: certbot/certbot:latest
-    profiles:
-      - ssl
-    volumes:
-      - ssl_certs:/etc/letsencrypt
-      - certbot_webroot:/var/www/certbot
-    entrypoint: /bin/sh
-    command: -c "while :; do certbot renew --quiet --webroot --webroot-path /var/www/certbot; sleep 86400; done"
-    restart: unless-stopped
 
 volumes:
   postgres_data:
   redis_data:
   media_uploads:
-  ssl_certs:
-  certbot_webroot:
