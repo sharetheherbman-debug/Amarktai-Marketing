@@ -90,11 +90,18 @@ Typical blockers remain runtime/environment dependent until deployed secrets are
 
 ## Final go/no-go verdict
 
-**Conditional NO-GO for “All systems go” at this exact moment in this sandbox**.
+**Merge #6 is not “full all-systems-go” by itself.**
 
-Reason:
+It only becomes full go-live once `scripts/marketing_full_go_live_gate.sh` passes on the production VPS (`/var/www/amarktai-marketing/repo`) against:
 
-- Authenticated end-to-end gate scripts were not executable here without live credentials/runtime target.
-- “All systems go” must only be declared after `scripts/marketing_full_go_live_gate.sh` passes with required production keys and integrations configured.
+- backend `http://127.0.0.1:8010`
+- frontend `https://marketing.amarktai.com`
+- live credentials/integrations for the authenticated checks
 
-When those scripts pass on the live target with required keys, go-live can be promoted to **GO**.
+Current truthful runtime caveats:
+
+- Twitter/X, TikTok, and YouTube posting are currently blocked/not implemented and should fail truthfully when `REQUIRE_ALL_PLATFORMS_POSTING=true`.
+- Facebook, Instagram, LinkedIn, Reddit, and Pinterest can only post when OAuth app credentials, user connection, token validity, scopes, and required platform target fields are all valid.
+- Scheduler coverage currently proves DB scheduling and upcoming-list visibility; automatic background publishing must be verified separately if that behavior is expected for go-live.
+
+Until the full VPS gate passes, the correct status remains **not yet full all-systems-go**.

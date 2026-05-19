@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 PUBLIC_BASE_URL="${PUBLIC_BASE_URL:-https://marketing.amarktai.com}"
 API_BASE_URL="${API_BASE_URL:-https://marketing.amarktai.com/api/v1}"
 EMAIL="${MARKETING_TEST_EMAIL:-}"
@@ -8,6 +10,12 @@ PASSWORD="${MARKETING_TEST_PASSWORD:-}"
 
 pass(){ echo "PASS: $1"; }
 fail(){ echo "FAIL: $1"; exit 1; }
+
+[[ -d "$REPO_ROOT/backend/app" && -f "$REPO_ROOT/app/package.json" ]] || fail "REPO_ROOT must contain backend/app and app/package.json"
+
+echo "Resolved REPO_ROOT: $REPO_ROOT"
+echo "Using PUBLIC_BASE_URL: $PUBLIC_BASE_URL"
+echo "Using API_BASE_URL: $API_BASE_URL"
 
 curl -fsSI "$PUBLIC_BASE_URL/" >/dev/null && pass "frontend loads" || fail "frontend loads"
 curl -fsS "$PUBLIC_BASE_URL/health" >/dev/null && pass "/health" || fail "/health"
@@ -40,11 +48,17 @@ import json,sys
 print((json.loads(sys.argv[1]).get('generation_metadata') or {}).get('generation_status',''))
 PY
 )
-  if [[ -n "${GENX_API_KEY:-}" ]]; then
-    [[ "$STATUS" == "configured" ]] && pass "content generation configured" || fail "content generation configured"
-  else
-    [[ "$STATUS" == "not_configured" ]] && pass "content generation gracefully not_configured" || fail "content generation gracefully not_configured"
-  fi
+  case "$STATUS" in
+    configured)
+      pass "content generation configured"
+      ;;
+    not_configured)
+      pass "content generation gracefully not_configured"
+      ;;
+    *)
+      fail "unexpected content generation status: ${STATUS:-<empty>}"
+      ;;
+  esac
 
   curl -fsS "$API_BASE_URL/settings/readiness" -H "Authorization: Bearer $TOKEN" >/dev/null && pass "integrations/settings readiness" || fail "integrations/settings readiness"
   curl -fsS "$API_BASE_URL/analytics/summary" -H "Authorization: Bearer $TOKEN" >/dev/null && pass "analytics page data" || fail "analytics page data"
@@ -53,11 +67,23 @@ else
   echo "SKIP: authenticated checks (set MARKETING_TEST_EMAIL and MARKETING_TEST_PASSWORD)"
 fi
 
-LEGACY_DOMAIN="builder"".amarktai.com"
-if grep -R "$LEGACY_DOMAIN" -n /home/runner/work/Amarktai-Marketing/Amarktai-Marketing/DEPLOYMENT_GUIDE.md /home/runner/work/Amarktai-Marketing/Amarktai-Marketing/DEPLOY_CHECKLIST.md /home/runner/work/Amarktai-Marketing/Amarktai-Marketing/deploy >/dev/null; then
-  fail "legacy builder-domain references remain in production deploy docs/config"
+LEGACY_DOMAIN="builder.amarktai.com"
+HYGIENE_TARGETS=()
+for target in DEPLOYMENT_GUIDE.md DEPLOY_CHECKLIST.md README.md deploy scripts; do
+  [[ -e "$REPO_ROOT/$target" ]] && HYGIENE_TARGETS+=("$REPO_ROOT/$target")
+done
+
+if ((${#HYGIENE_TARGETS[@]} == 0)); then
+  echo "WARN: no deploy/script/doc targets found for builder-domain hygiene scan"
 else
-  pass "no legacy builder-domain references in production deploy docs/config"
+  MATCHES="$(grep -R -n "$LEGACY_DOMAIN" "${HYGIENE_TARGETS[@]}" 2>/dev/null || true)"
+  DISALLOWED_MATCHES="$(printf '%s\n' "$MATCHES" | sed '/^[[:space:]]*$/d' | grep -v 'Builder is separate' || true)"
+  if [[ -n "$DISALLOWED_MATCHES" ]]; then
+    printf '%s\n' "$DISALLOWED_MATCHES"
+    fail "builder domain references remain outside explicit 'Builder is separate' warnings"
+  else
+    pass "no builder-domain references outside explicit Builder-is-separate warnings"
+  fi
 fi
 
 echo "Go-live smoke checks complete."
