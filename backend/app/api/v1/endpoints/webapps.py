@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Response, UploadFile, status
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 import uuid
 
@@ -12,6 +13,9 @@ from app.models.webapp import WebApp as WebAppModel, MAX_BUSINESSES_PER_USER
 from app.models.user import User
 from app.schemas.webapp import WebApp, WebAppCreate, WebAppUpdate
 from app.api.deps import get_current_user, is_admin_user
+from app.services.business_intelligence import analyze_business, normalize_url
+from app.services.provider_catalog import resolve_user_api_key
+from app.core.config import settings
 
 router = APIRouter()
 
@@ -28,8 +32,7 @@ async def _run_scrape(webapp_id: str) -> None:
     """
     import logging
     from app.db.base import SessionLocal
-    from app.services.scraper import scrape_page
-    from app.core.config import settings
+    from app.services.business_intelligence import analyze_business
 
     _logger = logging.getLogger(__name__)
     db = SessionLocal()
@@ -37,23 +40,22 @@ async def _run_scrape(webapp_id: str) -> None:
         webapp = db.query(WebAppModel).filter(WebAppModel.id == webapp_id).first()
         if not webapp:
             return
-        firecrawl_key = settings.FIRECRAWL_API_KEY or None
-        scraped = await scrape_page(
-            str(webapp.url),
-            timeout=30,
+        firecrawl_key = resolve_user_api_key(
+            db,
+            webapp.user_id,
+            "FIRECRAWL_API_KEY",
+            settings.FIRECRAWL_API_KEY,
+        )
+        intelligence = await analyze_business(
+            url=webapp.url,
+            name=webapp.name,
+            description=webapp.description,
             firecrawl_api_key=firecrawl_key,
+            timeout=25,
         )
         webapp.scraped_data = {
             "scraped_at": datetime.utcnow().isoformat(),
-            "title": scraped.title,
-            "meta_description": scraped.meta_description,
-            "headings": scraped.headings[:10],
-            "paragraphs": scraped.paragraphs[:5],
-            "social_links": scraped.social_links[:20],
-            "full_text": scraped.full_text[:2000],
-            "error": scraped.error,
-            "status": "error" if scraped.error else "ok",
-            "provider": scraped.provider,
+            **intelligence,
         }
         db.commit()
     except Exception as exc:
@@ -114,19 +116,103 @@ async def create_webapp(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Maximum of {MAX_BUSINESSES_PER_USER} businesses per user reached.",
             )
+    name = (webapp.name or "").strip()
+    normalized_url = normalize_url(webapp.url)
+    if not name and not normalized_url:
+        raise HTTPException(status_code=422, detail="Either name or url must be provided.")
+
+    firecrawl_key = resolve_user_api_key(
+        db,
+        current_user.id,
+        "FIRECRAWL_API_KEY",
+        settings.FIRECRAWL_API_KEY,
+    )
+    intelligence: dict[str, Any] = {}
+    if normalized_url:
+        try:
+            intelligence = await analyze_business(
+                url=normalized_url,
+                name=name or None,
+                description=webapp.description,
+                firecrawl_api_key=firecrawl_key,
+                timeout=25,
+            )
+        except Exception:
+            intelligence = {
+                "source_provider": "manual",
+                "scrape_status": "failed",
+                "warnings": ["Website analysis failed; profile created from provided fields."],
+            }
+
+    inferred_name = (
+        intelligence.get("business_name")
+        or name
+        or "Business Profile"
+    )
+    description = (webapp.description or intelligence.get("page_summary") or "").strip()
+    category = (webapp.category or "").strip()
+    target_audience = (webapp.target_audience or intelligence.get("target_audience_guess") or "").strip()
+    key_features = [k.strip() for k in (webapp.key_features or intelligence.get("products_services") or []) if isinstance(k, str) and k.strip()][:20]
+
     db_webapp = WebAppModel(
         id=str(uuid.uuid4()),
         user_id=current_user.id,
-        **webapp.model_dump()
+        name=inferred_name,
+        url=normalized_url or "",
+        description=description,
+        category=category,
+        target_audience=target_audience,
+        key_features=key_features,
+        logo=webapp.logo,
+        is_active=webapp.is_active if webapp.is_active is not None else True,
+        brand_voice=webapp.brand_voice,
+        market_location=webapp.market_location,
+        content_goals=webapp.content_goals,
+        scraper_source_urls=webapp.scraper_source_urls,
+        scraped_data={
+            "scraped_at": datetime.utcnow().isoformat(),
+            **intelligence,
+        } if intelligence else None,
     )
     db.add(db_webapp)
     db.commit()
     db.refresh(db_webapp)
 
-    # Auto-scrape in the background so creation is instant for the user
-    background_tasks.add_task(_run_scrape, db_webapp.id)
+    # Keep async refresh for richer data, but never block creation.
+    if normalized_url:
+        background_tasks.add_task(_run_scrape, db_webapp.id)
 
     return db_webapp
+
+
+class AnalyzeBusinessRequest(BaseModel):
+    name: str | None = None
+    url: str | None = None
+    description: str | None = None
+
+
+@router.post("/analyze")
+async def analyze_business_profile(
+    payload: AnalyzeBusinessRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    if not (payload.name and payload.name.strip()) and not (payload.url and payload.url.strip()):
+        raise HTTPException(status_code=422, detail="Either name or url must be provided.")
+    firecrawl_key = resolve_user_api_key(
+        db,
+        current_user.id,
+        "FIRECRAWL_API_KEY",
+        settings.FIRECRAWL_API_KEY,
+    )
+    intelligence = await analyze_business(
+        url=payload.url,
+        name=payload.name,
+        description=payload.description,
+        firecrawl_api_key=firecrawl_key,
+        timeout=25,
+    )
+    return intelligence
 
 @router.post("/{webapp_id}/scrape")
 async def scrape_webapp(
@@ -141,9 +227,6 @@ async def scrape_webapp(
     falls back to httpx + BeautifulSoup.  Returns the scraped_data dict so
     the frontend can display insights immediately.
     """
-    from app.services.scraper import scrape_page
-    from app.core.config import settings
-
     webapp = db.query(WebAppModel).filter(
         WebAppModel.id == webapp_id,
         WebAppModel.user_id == current_user.id,
@@ -151,30 +234,74 @@ async def scrape_webapp(
     if not webapp:
         raise HTTPException(status_code=404, detail="Web app not found")
 
-    firecrawl_key = settings.FIRECRAWL_API_KEY or None
-    scraped = await scrape_page(
-        str(webapp.url),
-        timeout=30,
+    firecrawl_key = resolve_user_api_key(
+        db,
+        current_user.id,
+        "FIRECRAWL_API_KEY",
+        settings.FIRECRAWL_API_KEY,
+    )
+    intelligence = await analyze_business(
+        url=webapp.url,
+        name=webapp.name,
+        description=webapp.description,
         firecrawl_api_key=firecrawl_key,
+        timeout=25,
     )
     scraped_data: dict[str, Any] = {
         "scraped_at": datetime.utcnow().isoformat(),
-        "title": scraped.title,
-        "meta_description": scraped.meta_description,
-        "headings": scraped.headings[:10],
-        "paragraphs": scraped.paragraphs[:5],
-        "social_links": scraped.social_links[:20],
-        "full_text": scraped.full_text[:2000],
-        "error": scraped.error,
-        "status": "error" if scraped.error else "ok",
-        "provider": scraped.provider,
+        **intelligence,
     }
     webapp.scraped_data = scraped_data
     db.commit()
 
     return {
-        "message": "Scraped successfully" if not scraped.error else f"Scrape error: {scraped.error}",
+        "message": "Scraped successfully" if intelligence.get("scrape_status") == "success" else "Scrape completed with warnings",
         "scraped_data": scraped_data,
+    }
+
+
+@router.post("/{webapp_id}/refresh-intelligence")
+async def refresh_intelligence(
+    webapp_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    webapp = db.query(WebAppModel).filter(
+        WebAppModel.id == webapp_id,
+        WebAppModel.user_id == current_user.id,
+    ).first()
+    if not webapp:
+        raise HTTPException(status_code=404, detail="Web app not found")
+
+    firecrawl_key = resolve_user_api_key(
+        db,
+        current_user.id,
+        "FIRECRAWL_API_KEY",
+        settings.FIRECRAWL_API_KEY,
+    )
+    intelligence = await analyze_business(
+        url=webapp.url,
+        name=webapp.name,
+        description=webapp.description,
+        firecrawl_api_key=firecrawl_key,
+        timeout=25,
+    )
+    webapp.scraped_data = {
+        "scraped_at": datetime.utcnow().isoformat(),
+        **intelligence,
+    }
+    if not webapp.description and intelligence.get("page_summary"):
+        webapp.description = str(intelligence["page_summary"])[:2000]
+    if not webapp.target_audience and intelligence.get("target_audience_guess"):
+        webapp.target_audience = str(intelligence["target_audience_guess"])[:512]
+    if intelligence.get("products_services"):
+        webapp.key_features = intelligence["products_services"][:20]
+    db.commit()
+    db.refresh(webapp)
+    return {
+        "ok": True,
+        "webapp_id": webapp.id,
+        "intelligence": webapp.scraped_data,
     }
 
 

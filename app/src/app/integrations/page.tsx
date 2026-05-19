@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
   CheckCircle2,
-  Cloud,
   ExternalLink,
   Instagram,
   Linkedin,
@@ -11,12 +10,9 @@ import {
   Music,
   Pin,
   RefreshCw,
-  Send,
   Twitter,
   Youtube,
   Facebook,
-  AtSign,
-  Camera,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -89,6 +85,17 @@ interface ReadinessData {
   social_platforms?: Record<string, { ui_status: string; can_post_now: boolean; missing: string[] }>;
 }
 
+interface ProviderDebugResult {
+  http_status: number;
+  base_url: string;
+  model?: string;
+  response_shape_keys: string[];
+  parsed_text_present: boolean;
+  parsed_content_present: boolean;
+  sanitized_preview: string;
+  error?: string | null;
+}
+
 const PLATFORMS = [
   { id: 'youtube', name: 'YouTube', icon: Youtube },
   { id: 'tiktok', name: 'TikTok', icon: Music },
@@ -98,10 +105,6 @@ const PLATFORMS = [
   { id: 'linkedin', name: 'LinkedIn', icon: Linkedin },
   { id: 'pinterest', name: 'Pinterest', icon: Pin },
   { id: 'reddit', name: 'Reddit', icon: MessageSquare },
-  { id: 'bluesky', name: 'Bluesky', icon: Cloud },
-  { id: 'threads', name: 'Threads', icon: AtSign },
-  { id: 'telegram', name: 'Telegram', icon: Send },
-  { id: 'snapchat', name: 'Snapchat', icon: Camera },
 ] as const;
 
 const statusTone: Record<string, string> = {
@@ -126,6 +129,7 @@ export default function IntegrationsPage() {
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [testingKey, setTestingKey] = useState<string | null>(null);
   const [updatingPlatform, setUpdatingPlatform] = useState<string | null>(null);
+  const [providerDebug, setProviderDebug] = useState<Record<string, ProviderDebugResult>>({});
 
   const globalKeyGroups = useMemo(() => {
     return apiKeys.global_keys.reduce<Record<string, GlobalKeyItem[]>>((acc, item) => {
@@ -248,6 +252,28 @@ export default function IntegrationsPage() {
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Firecrawl test failed');
       await fetchData();
+    } finally {
+      setTestingKey(null);
+    }
+  };
+
+  const debugProvider = async (keyName: string) => {
+    const endpoint =
+      keyName === 'GENX_API_KEY'
+        ? '/api/v1/settings/genx/debug-test'
+        : '/api/v1/settings/firecrawl/debug-test';
+    setTestingKey(`DEBUG_${keyName}`);
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: authHeaders(),
+      });
+      const data = await res.json() as ProviderDebugResult;
+      setProviderDebug((prev) => ({ ...prev, [keyName]: data }));
+      if (!res.ok || data.error) throw new Error(data.error || 'Debug request failed');
+      toast.success('Debug test completed');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Debug request failed');
     } finally {
       setTestingKey(null);
     }
@@ -437,8 +463,33 @@ export default function IntegrationsPage() {
                       Test
                     </Button>
                   )}
+                  {(item.key_name === 'GENX_API_KEY' || item.key_name === 'FIRECRAWL_API_KEY') && (
+                    <Button
+                      variant="outline"
+                      onClick={() => debugProvider(item.key_name)}
+                      disabled={testingKey === `DEBUG_${item.key_name}`}
+                    >
+                      {testingKey === `DEBUG_${item.key_name}` ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                      Debug
+                    </Button>
+                  )}
                 </div>
               </div>
+              {providerDebug[item.key_name] && (
+                <div className="mt-3 rounded-md border bg-slate-50 p-3 text-xs">
+                  <p>HTTP: {providerDebug[item.key_name].http_status || 0}</p>
+                  <p>Base URL: {providerDebug[item.key_name].base_url}</p>
+                  {providerDebug[item.key_name].model ? <p>Model: {providerDebug[item.key_name].model}</p> : null}
+                  <p>Parsed content: {providerDebug[item.key_name].parsed_content_present ? 'yes' : 'no'}</p>
+                  <p>Shape keys: {providerDebug[item.key_name].response_shape_keys.join(', ') || 'none'}</p>
+                  {providerDebug[item.key_name].sanitized_preview ? (
+                    <p className="mt-1 text-slate-600">Preview: {providerDebug[item.key_name].sanitized_preview}</p>
+                  ) : null}
+                  {providerDebug[item.key_name].error ? (
+                    <p className="mt-1 text-red-600">Error: {providerDebug[item.key_name].error}</p>
+                  ) : null}
+                </div>
+              )}
             </div>
           ))}
         </CardContent>

@@ -15,7 +15,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -333,6 +333,9 @@ export default function EngagementPage() {
                   <span className="text-2xl">{PLATFORM_ICONS[selectedEngagement.platform]}</span>
                   Review Engagement
                 </DialogTitle>
+                <DialogDescription className="sr-only">
+                  Review and edit the suggested engagement reply before approving or sending.
+                </DialogDescription>
               </DialogHeader>
 
               <div className="space-y-6">

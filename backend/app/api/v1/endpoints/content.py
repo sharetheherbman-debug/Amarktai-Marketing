@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import uuid
 from typing import List
+from pydantic import BaseModel
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, enforce_content_quota
@@ -24,8 +25,44 @@ from app.models.user import User
 from app.schemas.content import Content, ContentUpdate
 from app.services.social_rules import get_social_rule, resolve_platform_key
 from app.services.provider_catalog import resolve_user_api_key
+from app.services.business_intelligence import analyze_business
+from app.services.platform_catalog import filter_launch_platforms, launch_platforms, normalize_platform as normalize_catalog_platform
 
 router = APIRouter()
+
+
+class GenerateAllRequest(BaseModel):
+    webapp_id: str | None = None
+    platforms: list[str] | None = None
+
+
+def _extract_intelligence(webapp) -> dict:
+    if isinstance(webapp.scraped_data, dict):
+        return webapp.scraped_data
+    return {}
+
+
+def _template_from_intelligence(webapp_data: dict, platform: str, *, objective: str | None = None, tone: str | None = None, include_hashtags: bool = True, include_cta: bool = True) -> dict:
+    name = webapp_data.get("name") or "Your Business"
+    summary = webapp_data.get("summary") or webapp_data.get("description") or f"{name} helps customers solve important problems."
+    audience = webapp_data.get("target_audience") or "people interested in your offering"
+    products = webapp_data.get("products_services") or webapp_data.get("key_features") or []
+    product_line = ", ".join(products[:3]) if isinstance(products, list) and products else "our core services"
+    objective_line = f" Objective: {objective}." if objective else ""
+    tone_line = f" Tone: {tone}." if tone else ""
+    cta = "Learn more at our website" if include_cta else ""
+    caption = (
+        f"{name} on {platform.title()}: {summary} "
+        f"We focus on {product_line} for {audience}.{objective_line}{tone_line} {cta}"
+    ).strip()
+    hashtags = []
+    if include_hashtags:
+        hashtags = [f"#{tag}" for tag in (webapp_data.get("keywords") or [])[:6]]
+    return {
+        "title": f"{name} • {platform.title()}",
+        "caption": caption[:1000],
+        "hashtags": hashtags,
+    }
 
 
 def _get_hf_token(db: Session, user: User) -> str | None:
@@ -167,12 +204,23 @@ async def get_content_item(
 async def generate_content(
     webapp_id: str,
     platform: str,
+    objective: str | None = None,
+    tone: str | None = None,
+    campaign_type: str | None = None,
+    product_focus: str | None = None,
+    audience: str | None = None,
+    include_hashtags: bool = True,
+    include_cta: bool = True,
     db: Session = Depends(get_db),
     current_user: User = Depends(enforce_content_quota),
 ):
     """Generate AI content (text + image/video). Falls back to templates if no AI key configured."""
     from app.models.webapp import WebApp
     from app.services.media_service import get_media_url, VIDEO_PLATFORMS
+
+    platform = normalize_catalog_platform(platform)
+    if platform not in launch_platforms():
+        raise HTTPException(status_code=422, detail=f"Unsupported platform '{platform}'")
 
     webapp = db.query(WebApp).filter(WebApp.id == webapp_id, WebApp.user_id == current_user.id).first()
     if not webapp:
@@ -184,28 +232,74 @@ async def generate_content(
     genx_key = _get_genx_key(db, current_user)
     firecrawl_key = _get_firecrawl_key(db, current_user)
 
-    webapp_data = {
-        "name": webapp.name,
-        "url": str(webapp.url),
-        "description": webapp.description,
-        "category": webapp.category,
-        "target_audience": webapp.target_audience,
-        "key_features": webapp.key_features or [],
-    }
+    intelligence = _extract_intelligence(webapp)
+    if webapp.url and not intelligence:
+        try:
+            intelligence = await analyze_business(
+                url=webapp.url,
+                name=webapp.name,
+                description=webapp.description,
+                firecrawl_api_key=firecrawl_key,
+                timeout=25,
+            )
+            webapp.scraped_data = intelligence
+            db.commit()
+        except Exception:
+            intelligence = {"scrape_status": "failed", "source_provider": "manual", "warnings": ["Website analysis failed; using manual profile data."]}
 
-    result = await _generate_text_content(webapp_data, platform, hf_token, openai_key, qwen_key, genx_key)
+    webapp_data = {
+        "name": webapp.name or intelligence.get("business_name") or "Business",
+        "url": str(webapp.url or intelligence.get("normalized_url") or ""),
+        "description": webapp.description or intelligence.get("page_summary") or "",
+        "summary": intelligence.get("page_summary") or "",
+        "category": webapp.category or "",
+        "target_audience": audience or webapp.target_audience or intelligence.get("target_audience_guess") or "",
+        "key_features": webapp.key_features or intelligence.get("products_services") or [],
+        "products_services": intelligence.get("products_services") or webapp.key_features or [],
+        "keywords": intelligence.get("keywords") or [],
+    }
+    if product_focus:
+        webapp_data["products_services"] = [product_focus, *list(webapp_data.get("products_services") or [])][:5]
+    if campaign_type:
+        webapp_data["campaign_type"] = campaign_type
+    if objective:
+        webapp_data["objective"] = objective
+    if tone:
+        webapp_data["tone"] = tone
+
+    generation_warnings = list(intelligence.get("warnings") or [])
+    result = {}
+    genx_failed = False
+    try:
+        result = await _generate_text_content(webapp_data, platform, hf_token, openai_key, qwen_key, genx_key)
+    except Exception as exc:
+        genx_failed = True
+        generation_warnings.append(f"AI generation error: {str(exc)}")
+        result = {}
+    if not result.get("caption"):
+        genx_failed = True
+        result = _template_from_intelligence(
+            webapp_data,
+            platform,
+            objective=objective,
+            tone=tone,
+            include_hashtags=include_hashtags,
+            include_cta=include_cta,
+        )
+
     media_urls = await get_media_url(platform, webapp_data, qwen_key or hf_token)
     content_type = "video" if platform in VIDEO_PLATFORMS else "image"
-    # Truthful generation status for go-live readiness
     genx_configured = bool(genx_key)
-    ai_used = not result.get("_generation_error") and bool(genx_key or qwen_key or hf_token)
-    generation_status = "configured" if genx_configured else "not_configured"
-    generation_message = (
-        "GENX configured: live AI generation enabled."
-        if genx_configured
-        else "GENX_API_KEY is not configured. Generated output uses degraded fallback guidance; configure GENX for production-quality AI generation."
+    provider_attempted = "genx" if genx_key else ("qwen" if qwen_key else ("huggingface" if hf_token else "template"))
+    provider_name = result.get("provider") or ("template" if genx_failed else provider_attempted)
+    generation_status = (
+        "genx_success"
+        if provider_name == "genx"
+        else ("genx_failed_fallback_used" if genx_configured and provider_name != "template" else ("template_fallback" if provider_name == "template" else "fallback_provider_success"))
     )
-    provider_name = "genx" if genx_key else ("qwen" if qwen_key else ("huggingface" if hf_token else "template"))
+    generation_message = "Generation completed"
+    if generation_status != "genx_success":
+        generation_message = "Generated in degraded mode; review before posting."
 
     db_content = ContentModel(
         id=str(uuid.uuid4()),
@@ -218,7 +312,17 @@ async def generate_content(
         caption=result.get("caption", ""),
         hashtags=result.get("hashtags", []),
         media_urls=media_urls,
-        generation_metadata=_generation_package(platform, result, provider_name, generation_status, generation_message, genx_configured),
+        generation_metadata={
+            **_generation_package(platform, result, provider_name, "configured" if genx_configured else "not_configured", generation_message, genx_configured),
+            "provider_actual": provider_name,
+            "provider_attempted": provider_attempted,
+            "generation_status": generation_status,
+            "scrape_provider": intelligence.get("source_provider", "manual"),
+            "scrape_status": intelligence.get("scrape_status", "failed"),
+            "warnings": generation_warnings,
+            "degraded": generation_status != "genx_success",
+            "model": result.get("model", ""),
+        },
     )
     db.add(db_content)
     db.commit()
@@ -228,108 +332,56 @@ async def generate_content(
 
 @router.post("/generate-all")
 async def generate_all_content(
+    payload: GenerateAllRequest = Body(default_factory=GenerateAllRequest),
     db: Session = Depends(get_db),
     current_user: User = Depends(enforce_content_quota),
 ):
-    """Batch generate AI content for all active platforms + webapps."""
-    from app.models.user_api_key import UserIntegration
+    """Batch generate AI content for launch platforms for one business profile."""
     from app.models.webapp import WebApp
-    from app.services.hf_generator import HuggingFaceGenerator
-    from app.services.media_service import get_media_url, VIDEO_PLATFORMS
-    from app.services.scraper import scrape_page
-
-    hf_token = _get_hf_token(db, current_user)
-    openai_key = _get_openai_key(db, current_user)
-    qwen_key = _get_qwen_key(db, current_user)
-    genx_key = _get_genx_key(db, current_user)
-
-    webapps = db.query(WebApp).filter(WebApp.user_id == current_user.id, WebApp.is_active == True).all()
-    if not webapps:
+    webapp = None
+    if payload.webapp_id:
+        webapp = db.query(WebApp).filter(WebApp.id == payload.webapp_id, WebApp.user_id == current_user.id).first()
+    if not webapp:
+        webapp = db.query(WebApp).filter(WebApp.user_id == current_user.id, WebApp.is_active == True).order_by(WebApp.created_at.desc()).first()
+    if not webapp:
         raise HTTPException(status_code=400, detail="No active web apps found.")
 
-    connected = db.query(UserIntegration).filter(
-        UserIntegration.user_id == current_user.id, UserIntegration.is_connected == True
-    ).all()
-    platforms = [i.platform for i in connected] or ["instagram", "twitter", "linkedin", "facebook"]
+    requested = payload.platforms or launch_platforms()
+    platforms = filter_launch_platforms(requested) or launch_platforms()
 
-    created = []
-    for webapp in webapps[:2]:
-        live_description = webapp.description or ""
+    items: list[dict] = []
+    warnings: list[str] = []
+    for platform in platforms:
         try:
-            scraped = await scrape_page(str(webapp.url), timeout=15, firecrawl_api_key=firecrawl_key)
-            if scraped and not scraped.error and scraped.full_text:
-                live_description = scraped.full_text[:1200]
-        except Exception:
-            pass
-
-        webapp_data = {
-            "name": webapp.name,
-            "url": str(webapp.url),
-            "description": live_description or webapp.description,
-            "category": webapp.category,
-            "target_audience": webapp.target_audience,
-            "key_features": webapp.key_features or [],
-        }
-
-        active_token = genx_key or qwen_key or hf_token
-        generation_status = "configured" if genx_key else "not_configured"
-        if active_token:
-            try:
-                from app.services.ai_provider import AIProvider
-                provider = AIProvider.from_keys(
-                    genx_key=genx_key or "",
-                    qwen_key=qwen_key or "",
-                    hf_token=hf_token or "",
-                    openai_key=openai_key or "",
-                )
-                results = await provider.generate_batch(webapp_data, platforms)
-            except Exception:
-                results = {p: HuggingFaceGenerator._fallback_content(webapp_data, p) for p in platforms}
-        else:
-            results = {p: HuggingFaceGenerator._fallback_content(webapp_data, p) for p in platforms}
-
-        ai_used = bool(active_token)
-        generator_name = "genx" if genx_key else ("qwen" if qwen_key else ("huggingface" if hf_token else "template"))
-        for platform, content_dict in results.items():
-            if content_dict.get("_generation_error") and not content_dict.get("caption"):
-                continue
-            media_urls = await get_media_url(platform, webapp_data, active_token)
-            content_type = "video" if platform in VIDEO_PLATFORMS else "image"
-            db_content = ContentModel(
-                id=str(uuid.uuid4()),
-                user_id=current_user.id,
+            item = await generate_content(
                 webapp_id=webapp.id,
                 platform=platform,
-                type=content_type,
-                status=ContentStatus.PENDING,
-                title=content_dict.get("title", "Generated Post"),
-                caption=content_dict.get("caption", ""),
-                hashtags=content_dict.get("hashtags", []),
-                media_urls=media_urls,
-                generation_metadata={
-                    **_generation_package(
-                        platform,
-                        content_dict,
-                        generator_name,
-                        generation_status,
-                        "GENX configured: live AI generation enabled." if genx_key else "GENX_API_KEY is missing; batch generation is running in degraded mode.",
-                        bool(genx_key),
-                    ),
-                    "source": "manual_batch",
-                },
+                db=db,
+                current_user=current_user,
             )
-            db.add(db_content)
-            created.append(db_content)
+            items.append({
+                "id": item.id,
+                "platform": item.platform,
+                "title": item.title,
+                "caption": item.caption,
+                "generation_metadata": item.generation_metadata,
+            })
+        except Exception as exc:
+            items.append({
+                "platform": platform,
+                "error": str(exc),
+            })
+            warnings.append(f"{platform}: generation failed")
 
-    db.commit()
     return {
-        "message": f"Generated {len(created)} content items across {len(platforms)} platforms",
-        "count": len(created),
-        "platforms": platforms,
-        "generator": generator_name,
-        "generation_status": "configured" if genx_key else "not_configured",
-        "degraded": not bool(genx_key),
-        "degraded_reason": None if genx_key else "GENX_API_KEY missing; configure GenX for full production quality output.",
+        "count": len(items),
+        "items": items,
+        "generator_summary": {
+            "platforms_requested": platforms,
+            "success_count": len([i for i in items if "error" not in i]),
+            "error_count": len([i for i in items if "error" in i]),
+        },
+        "warnings": warnings,
     }
 
 
