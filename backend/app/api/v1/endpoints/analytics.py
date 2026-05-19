@@ -14,6 +14,7 @@ from app.db.base import get_db
 from app.models.content import Content as ContentModel
 from app.models.analytics import Analytics as AnalyticsModel
 from app.models.user import User
+from app.models.user_api_key import UserIntegration
 from app.schemas.analytics import AnalyticsSummary, PlatformStats, DailyStat
 from app.api.deps import get_current_user
 
@@ -168,9 +169,31 @@ async def learning_status(
         .scalar()
         or 0
     )
+    connected_platforms = db.query(UserIntegration).filter(
+        UserIntegration.user_id == current_user.id,
+        UserIntegration.is_connected == True,
+    ).count()
+    last_metric = db.query(AnalyticsModel).filter(
+        AnalyticsModel.user_id == current_user.id
+    ).order_by(AnalyticsModel.created_at.desc()).first()
+    mode = "manual_metrics"
+    if connected_platforms > 0:
+        mode = "connected_platforms"
+    if metrics_records == 0 and connected_platforms == 0:
+        mode = "disabled"
+    blockers: list[str] = []
+    if metrics_records == 0:
+        blockers.append("No metrics records yet")
+    if connected_platforms == 0:
+        blockers.append("No connected social platforms")
+
     return {
         "learning_active": metrics_records > 0,
         "metrics_records": metrics_records,
+        "last_learning_run": last_metric.created_at.isoformat() if last_metric and last_metric.created_at else None,
+        "next_learning_run": None,
+        "mode": mode,
+        "blockers": blockers,
         "message": "Learning active" if metrics_records > 0 else "Learning starts after metrics are captured or imported.",
     }
 

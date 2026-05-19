@@ -41,11 +41,31 @@ interface ReadinessData {
   checklist: { key: string; label: string; status: string; required: boolean }[];
   missing_required: string[];
   go_live_ready: boolean;
+  genx?: {
+    configured: boolean;
+    health_ok: boolean;
+    models_tested: boolean;
+    required_models_ok: boolean;
+    failed_models: { model: string; task: string; error?: string }[];
+  };
+  social_platforms?: Record<string, { ui_status: string; can_post_now: boolean; missing: string[] }>;
 }
 
 const AVAILABLE_API_KEYS = [
   { key: 'GENX_API_KEY', name: 'GenX API Key', description: 'Primary unified AI provider for all AI features (REQUIRED)', provider: 'GenX', required: true },
+  { key: 'GENX_BASE_URL', name: 'GenX Base URL', description: 'GenX API base URL', provider: 'GenX', required: true },
+  { key: 'GENX_DEFAULT_MODEL', name: 'GenX Default Model', description: 'Default model for general generation tasks', provider: 'GenX', required: true },
+  { key: 'GENX_MODEL_COPY', name: 'GenX Copy Model', description: 'Model override for copywriting', provider: 'GenX', required: false },
+  { key: 'GENX_MODEL_STRATEGY', name: 'GenX Strategy Model', description: 'Model override for strategy', provider: 'GenX', required: false },
+  { key: 'GENX_MODEL_ANALYSIS', name: 'GenX Analysis Model', description: 'Model override for analysis', provider: 'GenX', required: false },
+  { key: 'GENX_MODEL_LONG_FORM', name: 'GenX Long-form Model', description: 'Model override for long-form writing', provider: 'GenX', required: false },
+  { key: 'GENX_MODEL_MODERATION', name: 'GenX Moderation Model', description: 'Model override for moderation', provider: 'GenX', required: false },
+  { key: 'GENX_MODEL_FALLBACKS', name: 'GenX Fallback Models', description: 'Comma-separated fallback model IDs', provider: 'GenX', required: false },
+  { key: 'GENX_MODEL_ALLOWLIST', name: 'GenX Model Allowlist', description: 'Comma-separated allowlist model IDs', provider: 'GenX', required: false },
   { key: 'FIRECRAWL_API_KEY', name: 'Firecrawl API Key', description: 'Web scraping & competitive research (REQUIRED)', provider: 'Firecrawl', required: true },
+  { key: 'RESEND_API_KEY', name: 'Email Provider Key', description: 'Email provider API key', provider: 'Resend', required: false },
+  { key: 'STRIPE_SECRET_KEY', name: 'Stripe Secret Key', description: 'Stripe billing secret key', provider: 'Stripe', required: false },
+  { key: 'STRIPE_WEBHOOK_SECRET', name: 'Stripe Webhook Secret', description: 'Stripe webhook signing secret', provider: 'Stripe', required: false },
   { key: 'QWEN_API_KEY', name: 'Qwen / DashScope API Key', description: 'Legacy fallback provider', provider: 'Qwen (DashScope)', required: false },
   { key: 'HUGGINGFACE_TOKEN', name: 'HuggingFace Token', description: 'Legacy fallback provider', provider: 'HuggingFace', required: false },
   { key: 'OPENAI_API_KEY', name: 'OpenAI API Key', description: 'Optional compatibility fallback', provider: 'OpenAI', required: false },
@@ -284,6 +304,25 @@ export default function IntegrationsPage() {
                 ))}
               </div>
             </div>
+            {readiness.social_platforms && (
+              <div className="space-y-1 text-xs text-gray-600">
+                <p className="font-medium">Posting readiness</p>
+                <div className="flex flex-wrap gap-2">
+                  {Object.entries(readiness.social_platforms).map(([platform, state]) => (
+                    <Badge key={platform} variant={state.can_post_now ? 'default' : 'outline'}>
+                      {platform}: {state.ui_status}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+            )}
+            {readiness.genx && (
+              <div className="text-xs text-gray-700">
+                GenX: {readiness.genx.configured ? 'configured' : 'not configured'} ·
+                health {readiness.genx.health_ok ? 'ok' : 'failed'} ·
+                required models {readiness.genx.required_models_ok ? 'ok' : 'failed'}
+              </div>
+            )}
             {!readiness.go_live_ready && (
               <div className="text-sm text-amber-700">
                 Missing required: {readiness.missing_required.join(', ') || 'none'}

@@ -47,6 +47,9 @@ class Settings(BaseSettings):
     GENX_MODEL_ANALYSIS: str = ""
     GENX_MODEL_LONG_FORM: str = ""
     GENX_MODEL_MODERATION: str = ""
+    GENX_MODEL_IMAGE: str = ""
+    GENX_MODEL_VIDEO: str = ""
+    GENX_MODEL_AUDIO: str = ""
 
     # Primary LLM providers
     OPENAI_API_KEY: str = ""

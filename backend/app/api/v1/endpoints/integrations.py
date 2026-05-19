@@ -3,6 +3,7 @@ API Keys & Integrations Endpoints
 """
 
 import logging
+from datetime import timedelta
 import uuid
 from datetime import datetime
 from typing import List, Dict, Any
@@ -80,11 +81,23 @@ async def create_api_key(
     # Validate key name
     valid_keys = [
         "GENX_API_KEY",
+        "GENX_BASE_URL",
+        "GENX_DEFAULT_MODEL",
+        "GENX_MODEL_COPY",
+        "GENX_MODEL_STRATEGY",
+        "GENX_MODEL_ANALYSIS",
+        "GENX_MODEL_LONG_FORM",
+        "GENX_MODEL_MODERATION",
+        "GENX_MODEL_FALLBACKS",
+        "GENX_MODEL_ALLOWLIST",
         "FIRECRAWL_API_KEY",
         "QWEN_API_KEY",
         "HUGGINGFACE_TOKEN",
         "OPENAI_API_KEY",
         "GEMINI_API_KEY",
+        "RESEND_API_KEY",
+        "STRIPE_SECRET_KEY",
+        "STRIPE_WEBHOOK_SECRET",
     ]
     
     if api_key.key_name not in valid_keys:
@@ -271,6 +284,7 @@ async def connect_platform(
     # Store the state token as oauth_state for verification at callback
     pending.oauth_state = state_token
     pending.is_connected = False
+    pending.scopes = config.get("scope")
 
     # For Twitter PKCE, generate and store the code_verifier
     code_verifier = None
@@ -481,6 +495,8 @@ async def oauth_callback(
                     data = resp.json()
                     access_token = data.get("access_token")
                     refresh_token = data.get("refresh_token")
+                    returned_scope = data.get("scope")
+                    expires_in = data.get("expires_in")
                 else:
                     logger.warning("OAuth token exchange failed for %s: %s", platform, resp.text)
         except Exception as exc:
@@ -502,6 +518,13 @@ async def oauth_callback(
 
     integration.is_connected = True
     integration.connected_at = datetime.now()
+    if locals().get("returned_scope"):
+        integration.scopes = str(returned_scope)
+    if locals().get("expires_in"):
+        try:
+            integration.token_expires_at = datetime.now() + timedelta(seconds=int(expires_in))
+        except Exception:
+            pass
 
     if access_token:
         integration.encrypted_access_token = UserIntegration.encrypt_token(access_token)

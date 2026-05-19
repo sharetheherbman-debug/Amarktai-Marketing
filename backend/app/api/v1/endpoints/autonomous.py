@@ -25,6 +25,63 @@ class PostContentRequest(BaseModel):
     content_id: str
     scheduled_time: Optional[datetime] = None
 
+
+class CampaignPlanRequest(BaseModel):
+    webapp_id: str
+    goals: list[str] = []
+    platforms: list[str] = ["facebook", "instagram", "linkedin", "twitter", "tiktok", "youtube", "reddit"]
+
+
+@router.post("/campaign-plan")
+async def generate_campaign_plan(
+    payload: CampaignPlanRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    webapp = db.query(WebApp).filter(
+        WebApp.id == payload.webapp_id,
+        WebApp.user_id == current_user.id,
+    ).first()
+    if not webapp:
+        raise HTTPException(status_code=404, detail="Web app not found")
+
+    audience = webapp.target_audience or "general audience"
+    product = webapp.name
+    category = webapp.category or "general"
+    goals = payload.goals or ["awareness", "engagement", "traffic"]
+    platforms = payload.platforms
+    cadence = "3-5 posts/week"
+    best_times = {
+        "facebook": "Wed 15:00",
+        "instagram": "Wed 19:00",
+        "linkedin": "Tue 09:00",
+        "twitter": "Wed 12:00",
+        "tiktok": "Thu 20:00",
+        "youtube": "Fri 19:00",
+        "reddit": "Wed 21:00",
+    }
+    compliance_warnings = [
+        "Do not post regulated claims without human review.",
+        "Avoid duplicate/spam posting patterns.",
+        "Follow each platform terms and disclosure requirements.",
+    ]
+    return {
+        "webapp_id": webapp.id,
+        "audience": audience,
+        "product_service": product,
+        "goals": goals,
+        "platforms": platforms,
+        "content_pillars": [
+            f"{category} education",
+            "customer outcomes",
+            "behind-the-scenes",
+            "offer and CTA",
+        ],
+        "posting_cadence": cadence,
+        "best_time_recommendations": {p: best_times.get(p, "Wed 12:00") for p in platforms},
+        "compliance_warnings": compliance_warnings,
+    }
+
 @router.post("/batch-approve")
 async def batch_approve_content(
     request: BatchApproveRequest,
