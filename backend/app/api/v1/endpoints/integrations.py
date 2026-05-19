@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import List, Dict, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -17,6 +18,7 @@ from app.api.deps import get_current_user
 from app.models.user_api_key import UserAPIKey, UserIntegration
 from app.models.user import User
 from app.core.config import settings
+from app.services.provider_catalog import USER_PROVIDER_KEY_NAMES
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -79,31 +81,10 @@ async def create_api_key(
 ):
     """Add a new API key for the current user."""
     # Validate key name
-    valid_keys = [
-        "GENX_API_KEY",
-        "GENX_BASE_URL",
-        "GENX_DEFAULT_MODEL",
-        "GENX_MODEL_COPY",
-        "GENX_MODEL_STRATEGY",
-        "GENX_MODEL_ANALYSIS",
-        "GENX_MODEL_LONG_FORM",
-        "GENX_MODEL_MODERATION",
-        "GENX_MODEL_FALLBACKS",
-        "GENX_MODEL_ALLOWLIST",
-        "FIRECRAWL_API_KEY",
-        "QWEN_API_KEY",
-        "HUGGINGFACE_TOKEN",
-        "OPENAI_API_KEY",
-        "GEMINI_API_KEY",
-        "RESEND_API_KEY",
-        "STRIPE_SECRET_KEY",
-        "STRIPE_WEBHOOK_SECRET",
-    ]
-    
-    if api_key.key_name not in valid_keys:
+    if api_key.key_name not in USER_PROVIDER_KEY_NAMES:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid key name. Must be one of: {', '.join(valid_keys)}"
+            detail=f"Invalid key name. Must be one of: {', '.join(sorted(USER_PROVIDER_KEY_NAMES))}"
         )
     
     # Check if key already exists
@@ -301,7 +282,7 @@ async def connect_platform(
 
     params = {
         "client_id": config["client_id"],
-        "redirect_uri": f"{settings.FRONTEND_URL}/dashboard/settings/integrations/callback",
+        "redirect_uri": f"{settings.FRONTEND_URL.rstrip('/')}/api/v1/integrations/platforms/callback",
         "scope": config["scope"],
         "response_type": "code",
         "state": state_token,
@@ -368,7 +349,7 @@ async def update_integration(
     
     return {"message": "Integration updated successfully"}
 
-@router.post("/platforms/callback")
+@router.api_route("/platforms/callback", methods=["GET", "POST"])
 async def oauth_callback(
     code: str,
     state: str,
@@ -454,7 +435,7 @@ async def oauth_callback(
 
     cfg = token_endpoints.get(platform)
     if cfg and cfg.get("client_id") and cfg.get("client_secret"):
-        redirect_uri = f"{settings.FRONTEND_URL}/dashboard/settings/integrations/callback"
+        redirect_uri = f"{settings.FRONTEND_URL.rstrip('/')}/api/v1/integrations/platforms/callback"
         try:
             async with _httpx.AsyncClient(timeout=20) as client:
                 if platform == "reddit":
@@ -516,8 +497,8 @@ async def oauth_callback(
         )
         db.add(integration)
 
-    integration.is_connected = True
-    integration.connected_at = datetime.now()
+    integration.is_connected = bool(access_token)
+    integration.connected_at = datetime.now() if access_token else None
     if locals().get("returned_scope"):
         integration.scopes = str(returned_scope)
     if locals().get("expires_in"):
@@ -533,4 +514,17 @@ async def oauth_callback(
 
     db.commit()
 
-    return {"message": "Connected successfully", "platform": platform, "has_token": bool(access_token)}
+    html = f"""
+    <html>
+      <body>
+        <script>
+          if (window.opener) {{
+            window.opener.postMessage({{ type: "amarktai-oauth-complete", platform: "{platform}", ok: {str(bool(access_token)).lower()} }}, "{settings.FRONTEND_URL.rstrip('/')}");
+          }}
+          window.close();
+        </script>
+        Connection complete. You can close this window.
+      </body>
+    </html>
+    """
+    return HTMLResponse(html)

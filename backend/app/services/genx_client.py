@@ -83,12 +83,13 @@ class GenXClient:
                 "error": "GenX returned an empty response during health check.",
             }
         except Exception as exc:
+            logger.warning("GenX health check failed: %s", exc)
             latency_ms = int((time.perf_counter() - started) * 1000)
             return {
                 "ok": False,
                 "latency_ms": latency_ms,
                 "model": self.default_model,
-                "error": str(exc),
+                "error": "GenX health check request failed.",
             }
 
     def _endpoint(self) -> str:
@@ -153,7 +154,6 @@ class GenXClient:
             return None
         headers = {
             "Authorization": f"Bearer {self.api_key}",
-            "X-API-Key": self.api_key,
             "Content-Type": "application/json",
         }
         endpoint = self._endpoint()
@@ -222,7 +222,6 @@ class GenXClient:
             return {"ok": False, "source": "not_configured", "models": [], "error": "GenX API key/base URL not configured."}
         headers = {
             "Authorization": f"Bearer {self.api_key}",
-            "X-API-Key": self.api_key,
             "Content-Type": "application/json",
         }
         for endpoint in self._models_endpoint_candidates():
