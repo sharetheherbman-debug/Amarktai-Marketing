@@ -91,10 +91,10 @@ npm run dev                 # http://localhost:5173
 
 | Variable            | Required | Description                                                  |
 |---------------------|----------|--------------------------------------------------------------|
-| `DATABASE_URL`      | ✅       | `postgresql://user:pass@localhost:5432/amarktai`             |
+| `DATABASE_URL`      | ✅       | `postgresql://amarktai:${POSTGRES_PASSWORD}@db:5432/amarktai` |
 | `JWT_SECRET`        | ✅       | Random secret for JWT signing (`openssl rand -hex 32`)       |
 | `ENCRYPTION_KEY`    | ✅       | Base64 key for credential encryption (`openssl rand -base64 32`) |
-| `REDIS_URL`         | ✅       | `redis://localhost:6379/0`                                   |
+| `REDIS_URL`         | ✅       | `redis://redis:6379/0`                                       |
 | `GENX_API_KEY`      | ✅       | GenX unified AI API key (primary provider)                    |
 | `GENX_BASE_URL`     | ✅       | GenX API base URL                                              |
 | `GENX_DEFAULT_MODEL`| ✅       | Default GenX model for generation                              |
@@ -106,20 +106,26 @@ npm run dev                 # http://localhost:5173
 | `SENDGRID_API_KEY`  | ⬜       | Deferred — SMTP email not required for beta                  |
 | `STRIPE_SECRET_KEY` | ⬜       | Deferred — Payments not integrated in beta                   |
 | `ADMIN_EMAIL`       | ✅       | Default admin account email address                          |
-| `CORS_ORIGINS`      | ✅       | Comma-separated allowed frontend origins                     |
+| `CORS_ORIGINS`      | ✅       | JSON array of allowed frontend origins                       |
 | `MEDIA_UPLOAD_DIR`  | ⬜       | Directory for uploaded media assets (default: `/tmp/amarktai_media`). Use a persistent volume in production. |
 
 ---
 
 ## Deployment
 
-Deployed on a **Webdock VPS** running Ubuntu 22.04. The PostgreSQL connection string format used throughout is:
+Production uses a **shared-VPS Docker Compose** model:
+
+- Host Nginx owns public `:80` and `:443`
+- Docker exposes only `127.0.0.1:8000` and `127.0.0.1:3000`
+- PostgreSQL and Redis stay internal to the Compose network
+
+The PostgreSQL connection string format used throughout is:
 
 ```
-postgresql://amarktai_user:yourpassword@localhost:5432/amarktai
+postgresql://amarktai:${POSTGRES_PASSWORD}@db:5432/amarktai
 ```
 
-See [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md) for the full guide and [DEPLOY_CHECKLIST.md](./DEPLOY_CHECKLIST.md) for the pre-launch checklist.
+See [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md) for the full `builder.amarktai.com` guide, [DEPLOY_CHECKLIST.md](./DEPLOY_CHECKLIST.md) for the go-live checklist, and `deploy/nginx/builder.amarktai.com.conf` for the host-level Nginx site template.
 
 ---
 

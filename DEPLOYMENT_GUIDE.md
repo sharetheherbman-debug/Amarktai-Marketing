@@ -1,375 +1,208 @@
-# Deployment Guide — AmarktAI Marketing
+# Deployment Guide — builder.amarktai.com
 
-Deploy to a **Webdock VPS** running Ubuntu 22.04 LTS.
+This is the production deployment path for `sharetheherbman-debug/Amarktai-Marketing` on a shared VPS.
 
----
+## Deployment model
 
-## Server Requirements
+- Host Nginx owns public `:80` and `:443` for every app on the VPS.
+- Docker Compose runs this app privately on:
+  - `127.0.0.1:8000` → FastAPI backend
+  - `127.0.0.1:3000` → frontend container
+- PostgreSQL and Redis stay internal to the Compose network.
+- Public routing for `https://builder.amarktai.com` is handled by the host Nginx site config in `deploy/nginx/builder.amarktai.com.conf`.
 
-| Resource | Minimum     | Recommended |
-|----------|-------------|-------------|
-| OS       | Ubuntu 22.04 LTS | Ubuntu 22.04 LTS |
-| RAM      | 4 GB        | 8 GB        |
-| CPU      | 2 vCPU      | 4 vCPU      |
-| Storage  | 40 GB SSD   | 80 GB SSD   |
-| Ports    | 22, 80, 443 | 22, 80, 443 |
-
----
-
-## 1. Initial Server Setup
+## 1. Server prerequisites
 
 ```bash
-sudo apt update && sudo apt upgrade -y
-sudo apt install -y git curl wget build-essential software-properties-common
+sudo apt update
+sudo apt install -y docker.io docker-compose-plugin nginx certbot python3-certbot-nginx curl
+sudo systemctl enable --now docker nginx
 ```
 
----
-
-## 2. PostgreSQL 15 Setup
-
-### Install PostgreSQL
+## 2. Repository path
 
 ```bash
-sudo apt install -y postgresql postgresql-contrib
-sudo systemctl enable --now postgresql
+cd /var/www/amarktai-marketing/repo
+git pull --ff-only
 ```
 
-### Create database and user
+## 3. Docker Compose interpolation env
+
+Docker Compose reads the repository root `.env` file for `${...}` interpolation.
 
 ```bash
-sudo -u postgres psql
-```
-
-```sql
-CREATE DATABASE amarktai;
-CREATE USER amarktai_user WITH ENCRYPTED PASSWORD 'CHANGE_THIS_PASSWORD';
-GRANT ALL PRIVILEGES ON DATABASE amarktai TO amarktai_user;
-\q
-```
-
-### Verify connection
-
-```bash
-psql -U amarktai_user -d amarktai -c "SELECT 1;"
-```
-
----
-
-## 3. Redis Setup
-
-```bash
-sudo apt install -y redis-server
-sudo systemctl enable --now redis-server
-
-# Verify
-redis-cli ping   # should return PONG
-```
-
----
-
-## 4. Python and Backend Setup
-
-### Install Python 3.11
-
-```bash
-sudo apt install -y python3.11 python3.11-venv python3.11-dev
-```
-
-### Clone repository and create virtualenv
-
-```bash
-cd /var/www
-sudo git clone https://github.com/your-org/Amarktai-Marketing.git amarktai
-sudo chown -R $USER:$USER /var/www/amarktai
-cd /var/www/amarktai/backend
-
-python3.11 -m venv venv
-source venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
-```
-
-### Configure environment
-
-```bash
-cp .env.example .env
+cd /var/www/amarktai-marketing/repo
+cp deploy/docker-compose.env.example .env
 nano .env
 ```
 
-Required values in `.env`:
+Required production values in the root `.env`:
 
 ```env
-DATABASE_URL=postgresql://amarktai_user:CHANGE_THIS_PASSWORD@localhost:5432/amarktai
+POSTGRES_PASSWORD=<strong-password>
+DOMAIN=builder.amarktai.com
+VITE_API_URL=/api/v1
+```
+
+## 4. Backend runtime env
+
+The backend container, Celery worker, and Celery beat all load `backend/.env`.
+
+```bash
+cd /var/www/amarktai-marketing/repo
+cp backend/.env.example backend/.env
+nano backend/.env
+chmod 600 backend/.env
+```
+
+Required production values in `backend/.env`:
+
+```env
+APP_ENVIRONMENT=production
+FRONTEND_URL=https://builder.amarktai.com
+CORS_ORIGINS=["https://builder.amarktai.com"]
+DATABASE_URL=postgresql://amarktai:${POSTGRES_PASSWORD}@db:5432/amarktai
+REDIS_URL=redis://redis:6379/0
+ADMIN_EMAIL=
 JWT_SECRET=<output of: openssl rand -hex 32>
 ENCRYPTION_KEY=<output of: openssl rand -base64 32>
-REDIS_URL=redis://localhost:6379/0
-QWEN_API_KEY=sk-your-dashscope-key
-HUGGINGFACE_TOKEN=hf_your-token
-ADMIN_EMAIL=admin@yourdomain.com
-CORS_ORIGINS=https://yourdomain.com
+STRIPE_WEBHOOK_SECRET=<required in production>
+GENX_API_KEY=<required for full AI generation>
 ```
 
-### Run Alembic migrations
+Notes:
+
+- `DATABASE_URL` must stay on PostgreSQL.
+- `POSTGRES_PASSWORD` is supplied by the root `.env` or deployment environment.
+- Do not commit either `.env` file.
+- `/api/health` is **not** a valid endpoint in this app. Use `/health` or `/api/v1/health`.
+
+## 5. Validate Compose before restart
 
 ```bash
-cd /var/www/amarktai/backend
-source venv/bin/activate
-alembic upgrade head
+cd /var/www/amarktai-marketing/repo
+docker compose config
 ```
 
----
+Expected result:
 
-## 5. Backend — Gunicorn + Uvicorn Workers
+- Command exits `0`
+- No `version is obsolete` warning
+- Backend port shows `127.0.0.1:8000:8000`
+- Frontend port shows `127.0.0.1:3000:3000`
+- No host port mappings for PostgreSQL, Redis, or public `80/443`
 
-### Install Gunicorn
+## 6. Start or refresh the stack
 
 ```bash
-pip install gunicorn
+cd /var/www/amarktai-marketing/repo
+docker compose up -d --build
+docker compose ps
 ```
 
-### Create systemd service
+Expected result:
+
+- `db` and `redis` show healthy
+- `backend`, `frontend`, `celery_worker`, and `celery_beat` show running
+
+## 7. Install the host Nginx site
 
 ```bash
-sudo nano /etc/systemd/system/amarktai-api.service
-```
-
-```ini
-[Unit]
-Description=AmarktAI Marketing API
-After=network.target postgresql.service redis.service
-
-[Service]
-User=www-data
-Group=www-data
-WorkingDirectory=/var/www/amarktai/backend
-EnvironmentFile=/var/www/amarktai/backend/.env
-ExecStart=/var/www/amarktai/backend/venv/bin/gunicorn \
-    app.main:app \
-    --workers 4 \
-    --worker-class uvicorn.workers.UvicornWorker \
-    --bind 127.0.0.1:8000 \
-    --timeout 120 \
-    --access-logfile /var/log/amarktai/api-access.log \
-    --error-logfile /var/log/amarktai/api-error.log
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo mkdir -p /var/log/amarktai
-sudo chown www-data:www-data /var/log/amarktai
-sudo systemctl daemon-reload
-sudo systemctl enable --now amarktai-api
-sudo systemctl status amarktai-api
-```
-
----
-
-## 6. Celery Worker — Systemd Service
-
-### Worker service
-
-```bash
-sudo nano /etc/systemd/system/amarktai-worker.service
-```
-
-```ini
-[Unit]
-Description=AmarktAI Celery Worker
-After=network.target redis.service
-
-[Service]
-User=www-data
-Group=www-data
-WorkingDirectory=/var/www/amarktai/backend
-EnvironmentFile=/var/www/amarktai/backend/.env
-ExecStart=/var/www/amarktai/backend/venv/bin/celery \
-    -A app.celery_app worker \
-    --loglevel=info \
-    --logfile=/var/log/amarktai/celery-worker.log \
-    --concurrency=4
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-```
-
-### Beat scheduler service
-
-```bash
-sudo nano /etc/systemd/system/amarktai-beat.service
-```
-
-```ini
-[Unit]
-Description=AmarktAI Celery Beat Scheduler
-After=network.target redis.service
-
-[Service]
-User=www-data
-Group=www-data
-WorkingDirectory=/var/www/amarktai/backend
-EnvironmentFile=/var/www/amarktai/backend/.env
-ExecStart=/var/www/amarktai/backend/venv/bin/celery \
-    -A app.celery_app beat \
-    --loglevel=info \
-    --logfile=/var/log/amarktai/celery-beat.log
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now amarktai-worker amarktai-beat
-```
-
----
-
-## 7. Frontend Build
-
-### Install Node.js 18
-
-```bash
-curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-sudo apt install -y nodejs
-```
-
-### Build the frontend
-
-```bash
-cd /var/www/amarktai/app
-npm install
-npm run build       # output in dist/
-```
-
----
-
-## 8. Nginx Configuration
-
-### Install Nginx
-
-```bash
-sudo apt install -y nginx
-sudo systemctl enable --now nginx
-```
-
-### Site configuration
-
-```bash
-sudo nano /etc/nginx/sites-available/amarktai
-```
-
-```nginx
-server {
-    listen 80;
-    server_name yourdomain.com www.yourdomain.com;
-
-    # Frontend — serve built React app
-    root /var/www/amarktai/app/dist;
-    index index.html;
-
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
-
-    # Backend API — proxy to Gunicorn
-    location /api/ {
-        proxy_pass http://127.0.0.1:8000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 120s;
-    }
-
-    # WebSocket support (if used)
-    location /ws/ {
-        proxy_pass http://127.0.0.1:8000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-    }
-}
-```
-
-```bash
-sudo ln -s /etc/nginx/sites-available/amarktai /etc/nginx/sites-enabled/
+cd /var/www/amarktai-marketing/repo
+sudo cp deploy/nginx/builder.amarktai.com.conf /etc/nginx/sites-available/builder.amarktai.com
+sudo ln -sf /etc/nginx/sites-available/builder.amarktai.com /etc/nginx/sites-enabled/builder.amarktai.com
 sudo nginx -t
 sudo systemctl reload nginx
 ```
 
----
+Expected result:
 
-## 9. SSL with Certbot
+- `sudo nginx -t` prints `syntax is ok` and `test is successful`
+- `systemctl reload nginx` exits `0`
+
+The site template routes:
+
+- `/api/v1/` → `http://127.0.0.1:8000/api/v1/`
+- `/health` → `http://127.0.0.1:8000/health`
+- `/docs` → `http://127.0.0.1:8000/docs`
+- `/openapi.json` → `http://127.0.0.1:8000/openapi.json`
+- everything else → `http://127.0.0.1:3000/`
+
+It also preserves:
+
+- `Host: builder.amarktai.com`
+- `X-Real-IP`
+- `X-Forwarded-For`
+- `X-Forwarded-Proto`
+- WebSocket upgrade headers
+- `client_max_body_size 50M`
+
+## 8. TLS / Certbot
+
+If certificates already exist for `builder.amarktai.com`, keep the `ssl_certificate` paths in the site config as-is.
+
+If certificates do not exist yet:
 
 ```bash
-sudo apt install -y certbot python3-certbot-nginx
-sudo certbot --nginx -d yourdomain.com -d www.yourdomain.com
+sudo certbot --nginx -d builder.amarktai.com
+sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-Certbot automatically renews certificates via a systemd timer. Verify:
+## 9. Smoke-test commands
+
+Direct container paths:
 
 ```bash
-sudo certbot renew --dry-run
+curl -H "Host: builder.amarktai.com" http://127.0.0.1:8000/health
+curl -H "Host: builder.amarktai.com" http://127.0.0.1:8000/api/v1/health
+curl -I http://127.0.0.1:3000/
 ```
 
----
+Expected result:
 
-## 10. Post-Deployment Verification
+- `/health` → `200`
+- `/api/v1/health` → `200`
+- frontend localhost `:3000` → `200`
+
+Public paths:
 
 ```bash
-# Services running
-sudo systemctl status amarktai-api amarktai-worker amarktai-beat nginx postgresql redis-server
-
-# API health check
-curl https://yourdomain.com/api/health
-
-# Logs
-sudo journalctl -u amarktai-api -f
-tail -f /var/log/amarktai/celery-worker.log
+curl -I https://builder.amarktai.com/
+curl -I https://builder.amarktai.com/api/v1/health
+curl -I https://builder.amarktai.com/docs
+curl -I https://builder.amarktai.com/openapi.json
+curl -I https://builder.amarktai.com/api/health
 ```
 
----
+Expected result:
 
-## Environment Variable Checklist
+- `/` → `200`
+- `/api/v1/health` → `200`
+- `/docs` → `200`
+- `/openapi.json` → `200`
+- `/api/health` → `404` (expected)
 
-| Variable            | Value Format                                              |
-|---------------------|-----------------------------------------------------------|
-| `DATABASE_URL`      | `postgresql://user:pass@localhost:5432/amarktai`          |
-| `JWT_SECRET`        | 64-char hex string (`openssl rand -hex 32`)               |
-| `ENCRYPTION_KEY`    | Base64 string (`openssl rand -base64 32`)                 |
-| `REDIS_URL`         | `redis://localhost:6379/0`                                |
-| `QWEN_API_KEY`      | DashScope key starting with `sk-`                         |
-| `HUGGINGFACE_TOKEN` | HuggingFace token starting with `hf_`                     |
-| `ADMIN_EMAIL`       | Valid email address                                       |
-| `CORS_ORIGINS`      | `https://yourdomain.com` (no trailing slash)              |
-
-> ⚠️ **DATABASE_URL must use `postgresql://`**. PostgreSQL is the canonical database for this project. The docker-compose, Alembic migrations, and all config defaults are aligned to PostgreSQL.
-
----
-
-## Updating the Application
+## 10. Repeatable verification script
 
 ```bash
-cd /var/www/amarktai
-git pull origin main
+cd /var/www/amarktai-marketing/repo
+chmod +x deploy/verify-builder-go-live.sh
+DOMAIN=builder.amarktai.com ./deploy/verify-builder-go-live.sh
+```
 
-# Backend
-cd backend && source venv/bin/activate
-pip install -r requirements.txt
-alembic upgrade head
-sudo systemctl restart amarktai-api amarktai-worker amarktai-beat
+Expected result:
 
-# Frontend
-cd ../app && npm install && npm run build
-sudo systemctl reload nginx
+- Each line prints `PASS`
+- Final line prints `All go-live checks passed.`
+
+## 11. Useful diagnostics
+
+```bash
+cd /var/www/amarktai-marketing/repo
+docker compose logs backend --tail=100
+docker compose logs frontend --tail=100
+docker compose logs celery_worker --tail=100
+docker compose logs celery_beat --tail=100
+sudo tail -n 100 /var/log/nginx/builder.amarktai.com.error.log
 ```
