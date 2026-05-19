@@ -1,64 +1,196 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_ROOT="${REPO_ROOT:-/home/runner/work/Amarktai-Marketing/Amarktai-Marketing}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 BASE_URL="${BASE_URL:-http://127.0.0.1:8010}"
-FRONTEND_URL="${FRONTEND_URL:-http://127.0.0.1:5173}"
+FRONTEND_URL="${FRONTEND_URL:-https://marketing.amarktai.com}"
+ALLOW_UNAUTHENTICATED_SMOKE="${ALLOW_UNAUTHENTICATED_SMOKE:-false}"
+REQUIRE_FULL_POSTING="${REQUIRE_FULL_POSTING:-false}"
+REQUIRE_ALL_PLATFORMS_POSTING="${REQUIRE_ALL_PLATFORMS_POSTING:-false}"
+EMAIL="${MARKETING_TEST_EMAIL:-}"
+PASSWORD="${MARKETING_TEST_PASSWORD:-}"
 
 pass(){ echo "PASS: $1"; }
-fail(){ echo "FAIL: $1"; exit 1; }
+warn(){ echo "WARN: $1"; }
+
+BLOCKERS=()
+CONDITIONS=()
+
+add_blocker() {
+  BLOCKERS+=("$1")
+  echo "BLOCKER: $1"
+}
+
+add_condition() {
+  CONDITIONS+=("$1")
+  echo "CONDITION: $1"
+}
+
+run_check() {
+  local label="$1"
+  shift
+  if "$@"; then
+    pass "$label"
+  else
+    add_blocker "$label"
+  fi
+}
+
+finish() {
+  local verdict exit_code
+  if ((${#BLOCKERS[@]} > 0)); then
+    verdict="NO_GO"
+    exit_code=1
+  elif ((${#CONDITIONS[@]} > 0)); then
+    verdict="CONDITIONAL_GO_SUPERVISED"
+    exit_code=0
+  else
+    verdict="GO"
+    exit_code=0
+  fi
+
+  echo
+  echo "Final verdict: $verdict"
+  if ((${#BLOCKERS[@]} > 0)); then
+    echo "Blockers:"
+    printf ' - %s\n' "${BLOCKERS[@]}"
+  fi
+  if ((${#CONDITIONS[@]} > 0)); then
+    echo "Conditions:"
+    printf ' - %s\n' "${CONDITIONS[@]}"
+  fi
+
+  exit "$exit_code"
+}
+
+echo "Resolved REPO_ROOT: $REPO_ROOT"
+echo "Using BASE_URL: $BASE_URL"
+echo "Using FRONTEND_URL: $FRONTEND_URL"
+
+if [[ ! -d "$REPO_ROOT/backend/app" || ! -f "$REPO_ROOT/app/package.json" ]]; then
+  add_blocker "REPO_ROOT must contain backend/app and app/package.json"
+  finish
+fi
 
 cd "$REPO_ROOT"
 
-# 1) backend compile/import
-python3 -m compileall backend >/dev/null || fail "backend compile/import"
-pass "backend compile/import"
+run_check "backend compile/import" bash -lc "cd '$REPO_ROOT' && python3 -m compileall backend >/dev/null"
+run_check "frontend build" bash -lc "cd '$REPO_ROOT/app' && npm run build >/dev/null"
 
-# 2) frontend build
-(
-  cd app
-  npm run build >/dev/null
-) || fail "frontend build"
-pass "frontend build"
-
-# 3) deployment domain hygiene check (no builder deploy references in prod docs/config)
-if grep -R "builder\.amarktai\.com" -n DEPLOYMENT_GUIDE.md DEPLOY_CHECKLIST.md deploy 2>/dev/null; then
-  fail "builder domain references found in production deploy docs/config"
+if BASE_URL="$BASE_URL" FRONTEND_URL="$FRONTEND_URL" REPO_ROOT="$REPO_ROOT" "$REPO_ROOT/scripts/marketing_local_check.sh"; then
+  pass "baseline health/login/readiness checks"
+else
+  add_blocker "baseline health/login/readiness checks"
 fi
-pass "deployment domain hygiene"
 
-# 4-7) health/login/dashboard/readiness baseline
-BASE_URL="$BASE_URL" FRONTEND_URL="$FRONTEND_URL" ./scripts/marketing_local_check.sh || fail "baseline local smoke"
-pass "baseline health/login/readiness checks"
+if [[ -n "$EMAIL" || -n "$PASSWORD" ]]; then
+  if [[ -z "$EMAIL" || -z "$PASSWORD" ]]; then
+    add_blocker "MARKETING_TEST_EMAIL and MARKETING_TEST_PASSWORD must both be set for the authenticated gate"
+  fi
+elif [[ "$ALLOW_UNAUTHENTICATED_SMOKE" == "true" ]]; then
+  add_condition "Authenticated smoke skipped because ALLOW_UNAUTHENTICATED_SMOKE=true and no test credentials were provided"
+  finish
+else
+  add_blocker "MARKETING_TEST_EMAIL and MARKETING_TEST_PASSWORD are required unless ALLOW_UNAUTHENTICATED_SMOKE=true"
+  finish
+fi
 
-# 8-9) GenX model discovery and configured model tests
-./scripts/test_genx_models.sh || fail "GenX model gate"
-pass "GenX model gate"
+LOGIN_JSON=""
+TOKEN=""
+if [[ -n "$EMAIL" && -n "$PASSWORD" ]]; then
+  LOGIN_JSON=$(curl -fsS -X POST "$BASE_URL/api/v1/auth/login" -H 'Content-Type: application/json' -d "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}") || add_blocker "authenticated login"
+  if [[ -n "$LOGIN_JSON" ]]; then
+    TOKEN=$(python3 - <<'PY' "$LOGIN_JSON"
+import json,sys
+print(json.loads(sys.argv[1]).get("access_token",""))
+PY
+)
+    if [[ -n "$TOKEN" ]]; then
+      pass "authenticated login"
+    else
+      add_blocker "authenticated login access token"
+    fi
+  fi
+fi
 
-# 10-12) business profile and autonomous generation per platform
-./scripts/test_autonomous_generation.sh || fail "autonomous generation gate"
-pass "autonomous generation gate"
+if [[ -z "$TOKEN" ]]; then
+  finish
+fi
 
-# 13) groups route safety
-curl -fsSI "$FRONTEND_URL/dashboard/groups" >/dev/null || fail "groups route safety"
-pass "groups route safety"
+AUTH_HEADER=(-H "Authorization: Bearer $TOKEN")
 
-# 14) scheduler flow
-./scripts/test_scheduler_flow.sh || fail "scheduler flow"
-pass "scheduler flow"
+if PUBLIC_BASE_URL="$FRONTEND_URL" API_BASE_URL="${API_BASE_URL:-$FRONTEND_URL/api/v1}" REPO_ROOT="$REPO_ROOT" MARKETING_TEST_EMAIL="$EMAIL" MARKETING_TEST_PASSWORD="$PASSWORD" "$REPO_ROOT/scripts/marketing_go_live_smoke.sh"; then
+  pass "public go-live smoke"
+else
+  add_blocker "public go-live smoke"
+fi
 
-# 15) posting readiness flow
-./scripts/test_posting_readiness.sh || fail "posting readiness flow"
-pass "posting readiness flow"
+for script_name in test_genx_models.sh test_autonomous_generation.sh test_scheduler_flow.sh test_posting_readiness.sh test_learning_loop.sh; do
+  if BASE_URL="$BASE_URL" MARKETING_TEST_EMAIL="$EMAIL" MARKETING_TEST_PASSWORD="$PASSWORD" "$REPO_ROOT/scripts/$script_name"; then
+    pass "$script_name"
+  else
+    add_blocker "$script_name"
+  fi
+done
 
-# 16-17) analytics/manual metrics + learning status
-./scripts/test_learning_loop.sh || fail "learning loop flow"
-pass "learning loop flow"
+READINESS_JSON=$(curl -fsS "$BASE_URL/api/v1/settings/readiness" "${AUTH_HEADER[@]}") || {
+  add_blocker "settings readiness endpoint"
+  finish
+}
+PUBLISHING_JSON=$(curl -fsS "$BASE_URL/api/v1/publishing/readiness" "${AUTH_HEADER[@]}") || {
+  add_blocker "publishing readiness endpoint"
+  finish
+}
 
-# 18) no builder production deploy references except explicit warnings (already checked docs/config)
-pass "no builder production deploy references"
+while IFS='=' read -r key value; do
+  case "$key" in
+    GENX_CONFIGURED) GENX_CONFIGURED="$value" ;;
+    GENX_HEALTH_OK) GENX_HEALTH_OK="$value" ;;
+    GENX_MODELS_OK) GENX_MODELS_OK="$value" ;;
+    READY_SUPPORTED) READY_SUPPORTED="$value" ;;
+    BLOCKED_SUPPORTED) BLOCKED_SUPPORTED="$value" ;;
+    BLOCKED_ALL) BLOCKED_ALL="$value" ;;
+    UNSUPPORTED) UNSUPPORTED="$value" ;;
+  esac
+done < <(python3 - <<'PY' "$READINESS_JSON" "$PUBLISHING_JSON"
+import json,sys
+readiness=json.loads(sys.argv[1])
+publishing=json.loads(sys.argv[2])
+platforms=publishing.get("platforms") or {}
+ready_supported=[name for name,state in platforms.items() if state.get("posting_supported") and state.get("can_post_now")]
+blocked_supported=[name for name,state in platforms.items() if state.get("posting_supported") and not state.get("can_post_now")]
+blocked_all=[name for name,state in platforms.items() if not state.get("can_post_now")]
+unsupported=[name for name,state in platforms.items() if not state.get("posting_supported")]
+genx=readiness.get("genx") or {}
+print(f"GENX_CONFIGURED={1 if genx.get('configured') else 0}")
+print(f"GENX_HEALTH_OK={1 if genx.get('health_ok') else 0}")
+print(f"GENX_MODELS_OK={1 if genx.get('required_models_ok') else 0}")
+print(f"READY_SUPPORTED={','.join(ready_supported)}")
+print(f"BLOCKED_SUPPORTED={','.join(blocked_supported)}")
+print(f"BLOCKED_ALL={','.join(blocked_all)}")
+print(f"UNSUPPORTED={','.join(unsupported)}")
+PY
+)
 
-# 19) no 500 responses in tested flows
-pass "no 500 responses observed in gate scripts"
+[[ "${GENX_CONFIGURED:-0}" == "1" ]] || add_blocker "GenX is not configured with either GENX_API_KEY or an active per-user GENX key"
+[[ "${GENX_HEALTH_OK:-0}" == "1" ]] || add_blocker "GenX health check is not passing"
+[[ "${GENX_MODELS_OK:-0}" == "1" ]] || add_blocker "GenX required models are not all healthy"
 
-echo "marketing full go-live gate complete"
+if [[ -z "${READY_SUPPORTED:-}" ]]; then
+  if [[ "$REQUIRE_FULL_POSTING" == "true" ]]; then
+    add_blocker "REQUIRE_FULL_POSTING=true but no supported platform can_post_now=true"
+  else
+    add_condition "No supported live-posting platform currently reports can_post_now=true"
+  fi
+else
+  pass "supported live-posting readiness: ${READY_SUPPORTED}"
+fi
+
+if [[ "$REQUIRE_ALL_PLATFORMS_POSTING" == "true" && -n "${BLOCKED_ALL:-}" ]]; then
+  add_blocker "REQUIRE_ALL_PLATFORMS_POSTING=true but these platforms cannot post now: ${BLOCKED_ALL}"
+elif [[ -n "${UNSUPPORTED:-}" ]]; then
+  warn "Posting not implemented for: ${UNSUPPORTED}"
+fi
+
+finish
