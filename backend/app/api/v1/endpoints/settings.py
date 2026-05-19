@@ -60,11 +60,6 @@ class FirecrawlTestRequest(BaseModel):
     key_value: str | None = None
 
 
-def _safe_error(exc: Exception | str | None) -> str:
-    value = str(exc or "").replace("\n", " ").strip()
-    return value[:300]
-
-
 def _safe_preview(value: str | None, limit: int = 300) -> str:
     if not value:
         return ""
@@ -547,14 +542,16 @@ async def get_readiness(
         try:
             genx_health = await _run_genx_test(genx_key)
         except Exception as exc:
-            genx_health = {"ok": False, "error": _safe_error(exc)}
+            logger.warning("GenX readiness check failed for user %s: %s", current_user.id, type(exc).__name__)
+            genx_health = {"ok": False, "error": "GenX check failed."}
 
     firecrawl_probe = {"ok": False, "error": "Firecrawl is not configured"}
     if firecrawl_configured:
         try:
             firecrawl_probe = await test_firecrawl_key(firecrawl_key)
         except Exception as exc:
-            firecrawl_probe = {"ok": False, "error": _safe_error(exc)}
+            logger.warning("Firecrawl readiness check failed for user %s: %s", current_user.id, type(exc).__name__)
+            firecrawl_probe = {"ok": False, "error": "Firecrawl check failed."}
     firecrawl_last = _record_firecrawl_test(
         current_user.id,
         ok=bool(firecrawl_probe.get("ok")),
@@ -589,13 +586,13 @@ async def get_readiness(
             "required": True,
             "source": genx_source,
             "status": _test_state(genx_configured, ok=bool(genx_health.get("ok")) if genx_configured else None),
-            "message": genx_health.get("error"),
+            "message": None if bool(genx_health.get("ok")) else ("GenX check failed." if genx_configured else "GenX is not configured."),
         },
         "firecrawl": {
             "required": True,
             "source": firecrawl_source,
             "status": _test_state(firecrawl_configured, ok=bool(firecrawl_probe.get("ok")) if firecrawl_configured else None),
-            "message": firecrawl_probe.get("error"),
+            "message": None if bool(firecrawl_probe.get("ok")) else ("Firecrawl check failed." if firecrawl_configured else "Firecrawl is not configured."),
         },
     }
     providers = {name: detail["status"] for name, detail in provider_details.items()}
@@ -656,7 +653,7 @@ async def get_readiness(
             "configured": firecrawl_configured,
             "status": provider_details["firecrawl"]["status"],
             "last_checked_at": firecrawl_last.get("checked_at"),
-            "error": firecrawl_last.get("error"),
+            "error": "Provider test failed." if provider_details["firecrawl"]["status"] == "test_failed" else None,
         },
         "social_platforms": {k: posting.get("platforms", {}).get(k, {}) for k in PLATFORM_KEYS} if isinstance(posting, dict) else {},
         "missing_required": missing_required,
@@ -735,6 +732,7 @@ async def genx_debug_test(
             "effective_source": source,
         }
     except Exception as exc:
+        logger.warning("GenX debug test failed for user %s: %s", current_user.id, type(exc).__name__)
         return {
             "http_status": 0,
             "base_url": base_url,
@@ -743,7 +741,7 @@ async def genx_debug_test(
             "parsed_text_present": False,
             "parsed_content_present": False,
             "sanitized_preview": "",
-            "error": _safe_error(exc),
+            "error": "GenX request failed.",
             "effective_source": source,
         }
 
@@ -797,6 +795,7 @@ async def firecrawl_debug_test(
             "effective_source": source,
         }
     except Exception as exc:
+        logger.warning("Firecrawl debug test failed for user %s: %s", current_user.id, type(exc).__name__)
         return {
             "http_status": 0,
             "base_url": base_url,
@@ -804,6 +803,6 @@ async def firecrawl_debug_test(
             "parsed_text_present": False,
             "parsed_content_present": False,
             "sanitized_preview": "",
-            "error": _safe_error(exc),
+            "error": "Firecrawl request failed.",
             "effective_source": source,
         }

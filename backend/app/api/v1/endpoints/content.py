@@ -274,7 +274,7 @@ async def generate_content(
         result = await _generate_text_content(webapp_data, platform, hf_token, openai_key, qwen_key, genx_key)
     except Exception as exc:
         genx_failed = True
-        generation_warnings.append(f"AI generation error: {str(exc)}")
+        generation_warnings.append("AI generation failed; fallback content was used.")
         result = {}
     if not result.get("caption"):
         genx_failed = True
@@ -369,7 +369,7 @@ async def generate_all_content(
         except Exception as exc:
             items.append({
                 "platform": platform,
-                "error": str(exc),
+                "error": "generation_failed",
             })
             warnings.append(f"{platform}: generation failed")
 
