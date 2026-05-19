@@ -41,6 +41,10 @@ export default function NewWebAppPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!formData.name.trim() && !formData.url.trim()) {
+      toast.error('Please provide at least a business name or website URL.');
+      return;
+    }
     setStep('creating');
 
     try {
@@ -140,26 +144,24 @@ export default function NewWebAppPage() {
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-6">
             <motion.div custom={0} variants={fadeUp} initial="hidden" animate="show" className="space-y-2">
-              <Label htmlFor="name">Business Name *</Label>
+              <Label htmlFor="name">Business Name</Label>
               <Input
                 id="name"
                 placeholder="e.g., TaskFlow Pro"
                 value={formData.name}
                 onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                required
                 disabled={isSubmitting}
               />
             </motion.div>
 
             <motion.div custom={1} variants={fadeUp} initial="hidden" animate="show" className="space-y-2">
-              <Label htmlFor="url">Website URL *</Label>
+              <Label htmlFor="url">Website URL</Label>
               <Input
                 id="url"
                 type="url"
                 placeholder="https://yourapp.com"
                 value={formData.url}
                 onChange={(e) => setFormData({ ...formData, url: e.target.value })}
-                required
                 disabled={isSubmitting}
               />
               <p className="text-xs text-gray-500 flex items-center gap-1">
@@ -169,14 +171,13 @@ export default function NewWebAppPage() {
             </motion.div>
 
             <motion.div custom={2} variants={fadeUp} initial="hidden" animate="show" className="space-y-2">
-              <Label htmlFor="description">Description *</Label>
+              <Label htmlFor="description">Description</Label>
               <Textarea
                 id="description"
                 placeholder="What does your business do? What problem does it solve?"
                 value={formData.description}
                 onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                 rows={3}
-                required
                 disabled={isSubmitting}
               />
             </motion.div>
@@ -202,13 +203,12 @@ export default function NewWebAppPage() {
             </motion.div>
 
             <motion.div custom={4} variants={fadeUp} initial="hidden" animate="show" className="space-y-2">
-              <Label htmlFor="targetAudience">Target Audience *</Label>
+              <Label htmlFor="targetAudience">Target Audience</Label>
               <Input
                 id="targetAudience"
                 placeholder="e.g., Remote teams, project managers, startups"
                 value={formData.targetAudience}
                 onChange={(e) => setFormData({ ...formData, targetAudience: e.target.value })}
-                required
                 disabled={isSubmitting}
               />
             </motion.div>

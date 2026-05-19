@@ -8,6 +8,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Any
+import httpx
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -57,6 +58,69 @@ class APIKeyTestRequest(BaseModel):
 
 class FirecrawlTestRequest(BaseModel):
     key_value: str | None = None
+
+
+def _safe_preview(value: str | None, limit: int = 300) -> str:
+    if not value:
+        return ""
+    return str(value).replace("\n", " ").strip()[:limit]
+
+
+def _extract_genx_text(data: dict[str, Any]) -> str:
+    if not isinstance(data, dict):
+        return ""
+    paths = [
+        ("choices", 0, "message", "content"),
+        ("choices", 0, "text"),
+        ("output_text",),
+        ("output",),
+        ("response",),
+        ("content",),
+        ("text",),
+        ("data", "output"),
+        ("data", "text"),
+        ("data", "content"),
+        ("result",),
+        ("result", "text"),
+        ("result", "content"),
+    ]
+    for path in paths:
+        current: Any = data
+        ok = True
+        for key in path:
+            if isinstance(key, int):
+                if isinstance(current, list) and len(current) > key:
+                    current = current[key]
+                else:
+                    ok = False
+                    break
+            else:
+                if isinstance(current, dict) and key in current:
+                    current = current[key]
+                else:
+                    ok = False
+                    break
+        if ok and isinstance(current, str) and current.strip():
+            return current.strip()
+    return ""
+
+
+def _resolve_provider_key(db: Session, user_id: str, key_name: str, env_value: str | None = None) -> tuple[str, str]:
+    row = db.query(UserAPIKey).filter(
+        UserAPIKey.user_id == user_id,
+        UserAPIKey.key_name == key_name,
+        UserAPIKey.is_active == True,
+    ).first()
+    if row:
+        try:
+            key = row.get_decrypted_key()
+            if key:
+                return key, "user"
+        except Exception:
+            pass
+    if env_value:
+        return env_value, "env"
+    return "", "missing"
 
 
 def _provider_state(configured: bool) -> str:
@@ -468,12 +532,43 @@ async def get_readiness(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    genx_key = resolve_user_api_key(db, current_user.id, "GENX_API_KEY", settings.GENX_API_KEY)
-    firecrawl_key = resolve_user_api_key(db, current_user.id, "FIRECRAWL_API_KEY", settings.FIRECRAWL_API_KEY)
+    genx_key, genx_source = _resolve_provider_key(db, current_user.id, "GENX_API_KEY", settings.GENX_API_KEY)
+    firecrawl_key, firecrawl_source = _resolve_provider_key(db, current_user.id, "FIRECRAWL_API_KEY", settings.FIRECRAWL_API_KEY)
     genx_configured = bool(genx_key and settings.GENX_BASE_URL and settings.GENX_DEFAULT_MODEL)
     firecrawl_configured = bool(firecrawl_key)
-    email_configured = bool(settings.RESEND_API_KEY)
-    stripe_configured = bool(settings.STRIPE_SECRET_KEY and settings.STRIPE_WEBHOOK_SECRET)
+
+    genx_health = {"ok": False, "error": "GenX is not configured"}
+    if genx_configured:
+        try:
+            genx_health = await _run_genx_test(genx_key)
+        except Exception as exc:
+            logger.warning("GenX readiness check failed for user %s: %s", current_user.id, type(exc).__name__)
+            genx_health = {"ok": False, "error": "GenX check failed."}
+
+    firecrawl_probe = {"ok": False, "error": "Firecrawl is not configured"}
+    if firecrawl_configured:
+        try:
+            firecrawl_probe = await test_firecrawl_key(firecrawl_key)
+        except Exception as exc:
+            logger.warning("Firecrawl readiness check failed for user %s: %s", current_user.id, type(exc).__name__)
+            firecrawl_probe = {"ok": False, "error": "Firecrawl check failed."}
+    firecrawl_last = _record_firecrawl_test(
+        current_user.id,
+        ok=bool(firecrawl_probe.get("ok")),
+        error=str(firecrawl_probe.get("error") or ""),
+    )
+
+    try:
+        db.execute(sql_text("SELECT 1"))
+        db_state = "configured"
+    except Exception:
+        db_state = "not_configured"
+
+    posting = {"platforms": {}}
+    try:
+        posting = publishing_readiness(db, current_user.id)
+    except Exception:
+        posting = {"platforms": {}}
 
     oauth_states = {
         "youtube": _provider_state(_is_oauth_configured(settings.YOUTUBE_CLIENT_ID, settings.YOUTUBE_CLIENT_SECRET)),
@@ -484,87 +579,61 @@ async def get_readiness(
         "linkedin": _provider_state(_is_oauth_configured(settings.LINKEDIN_CLIENT_ID, settings.LINKEDIN_CLIENT_SECRET)),
         "pinterest": _provider_state(_is_oauth_configured(settings.PINTEREST_CLIENT_ID, settings.PINTEREST_CLIENT_SECRET)),
         "reddit": _provider_state(_is_oauth_configured(settings.REDDIT_CLIENT_ID, settings.REDDIT_CLIENT_SECRET)),
-        "snapchat": _provider_state(_is_oauth_configured(settings.SNAPCHAT_CLIENT_ID, settings.SNAPCHAT_CLIENT_SECRET)),
     }
-
-    db_state = "not_configured"
-    try:
-        db.execute(sql_text("SELECT 1"))
-        db_state = "configured"
-    except Exception:
-        db_state = "not_configured"
-
-    celery_state = _provider_state(bool(settings.REDIS_URL))
-    genx_health = await _run_genx_test(genx_key) if genx_configured else {"ok": False, "error": "GenX is not configured"}
-    genx_last = _GENX_LAST_TEST_STATE.get(current_user.id, {})
-    if firecrawl_configured:
-        firecrawl_probe = await test_firecrawl_key(firecrawl_key)
-        firecrawl_last = _record_firecrawl_test(
-            current_user.id,
-            ok=bool(firecrawl_probe["ok"]),
-            error=str(firecrawl_probe.get("error") or ""),
-        )
-    else:
-        firecrawl_last = _FIRECRAWL_LAST_TEST_STATE.get(current_user.id, {})
-    genx_required_models_ok = bool(genx_last.get("required_models_ok")) if genx_last else bool(genx_health.get("ok"))
-    posting = publishing_readiness(db, current_user.id)
 
     provider_details = {
         "genx": {
             "required": True,
-            "source": "user" if resolve_user_api_key(db, current_user.id, "GENX_API_KEY") else ("env" if settings.GENX_API_KEY else "missing"),
+            "source": genx_source,
             "status": _test_state(genx_configured, ok=bool(genx_health.get("ok")) if genx_configured else None),
-            "message": genx_health.get("error") if genx_configured and not genx_health.get("ok") else None,
+            "message": None if bool(genx_health.get("ok")) else ("GenX check failed." if genx_configured else "GenX is not configured."),
         },
         "firecrawl": {
             "required": True,
-            "source": "user" if resolve_user_api_key(db, current_user.id, "FIRECRAWL_API_KEY") else ("env" if settings.FIRECRAWL_API_KEY else "missing"),
-            "status": _test_state(
-                firecrawl_configured,
-                ok=firecrawl_last.get("ok") if firecrawl_last else None,
-            ),
-            "message": firecrawl_last.get("error") if firecrawl_last and not firecrawl_last.get("ok") else None,
-        },
-        "qwen": {
-            "required": False,
-            "source": "user" if resolve_user_api_key(db, current_user.id, "QWEN_API_KEY") else ("env" if settings.QWEN_API_KEY else "missing"),
-            "status": _test_state(bool(resolve_user_api_key(db, current_user.id, "QWEN_API_KEY", settings.QWEN_API_KEY))),
-        },
-        "huggingface": {
-            "required": False,
-            "source": "user" if resolve_user_api_key(db, current_user.id, "HUGGINGFACE_TOKEN") else ("env" if settings.HUGGINGFACE_TOKEN else "missing"),
-            "status": _test_state(bool(resolve_user_api_key(db, current_user.id, "HUGGINGFACE_TOKEN", settings.HUGGINGFACE_TOKEN))),
-        },
-        "openai": {
-            "required": False,
-            "source": "user" if resolve_user_api_key(db, current_user.id, "OPENAI_API_KEY") else ("env" if settings.OPENAI_API_KEY else "missing"),
-            "status": _test_state(bool(resolve_user_api_key(db, current_user.id, "OPENAI_API_KEY", settings.OPENAI_API_KEY))),
-        },
-        "gemini": {
-            "required": False,
-            "source": "user" if resolve_user_api_key(db, current_user.id, "GEMINI_API_KEY") else ("env" if settings.GEMINI_API_KEY else "missing"),
-            "status": _test_state(bool(resolve_user_api_key(db, current_user.id, "GEMINI_API_KEY", settings.GEMINI_API_KEY))),
+            "source": firecrawl_source,
+            "status": _test_state(firecrawl_configured, ok=bool(firecrawl_probe.get("ok")) if firecrawl_configured else None),
+            "message": None if bool(firecrawl_probe.get("ok")) else ("Firecrawl check failed." if firecrawl_configured else "Firecrawl is not configured."),
         },
     }
-
     providers = {name: detail["status"] for name, detail in provider_details.items()}
-    providers["email"] = _provider_state(email_configured)
-    providers["stripe"] = _provider_state(stripe_configured)
     providers["database"] = db_state
-    providers["scheduler_celery"] = celery_state
+    providers["scheduler_celery"] = _provider_state(bool(settings.REDIS_URL))
+
+    platform_generation = {k: True for k in PLATFORM_KEYS}
+    posting_readiness = {}
+    for platform in PLATFORM_KEYS:
+        state = posting.get("platforms", {}).get(platform, {}) if isinstance(posting, dict) else {}
+        posting_readiness[platform] = {
+            "can_post_now": bool(state.get("can_post_now", False)),
+            "blockers": state.get("missing", ["oauth_not_configured"]) if isinstance(state, dict) else ["oauth_not_configured"],
+        }
+
+    generation_readiness = {
+        "genx": provider_details["genx"]["status"],
+        "firecrawl": provider_details["firecrawl"]["status"],
+        "fallback": "configured",
+        "can_generate_beta": True,
+    }
+    scraping_readiness = {
+        "firecrawl": provider_details["firecrawl"]["status"],
+        "fallback_scraper_available": True,
+    }
+
+    missing_required = []
+    if db_state != "configured":
+        missing_required.append("Database health")
+
+    beta_go_ready = True
+    full_go_live_ready = (
+        provider_details["genx"]["status"] == "test_passed"
+        and provider_details["firecrawl"]["status"] == "test_passed"
+    )
 
     checklist = [
-        {"key": "genx", "label": "GenX AI provider", "status": provider_details["genx"]["status"], "required": True},
-        {"key": "firecrawl", "label": "Firecrawl scraper", "status": provider_details["firecrawl"]["status"], "required": True},
+        {"key": "genx", "label": "GenX AI provider", "status": provider_details["genx"]["status"], "required": False},
+        {"key": "firecrawl", "label": "Firecrawl scraper", "status": provider_details["firecrawl"]["status"], "required": False},
         {"key": "database", "label": "Database health", "status": providers["database"], "required": True},
-        {"key": "scheduler_celery", "label": "Scheduler/Celery", "status": providers["scheduler_celery"], "required": False},
-        {"key": "email", "label": "Email provider", "status": providers["email"], "required": False},
-        {"key": "stripe", "label": "Stripe billing", "status": providers["stripe"], "required": False},
     ]
-
-    missing_required = [c["label"] for c in checklist if c["required"] and c["status"] not in {"configured", "test_passed"}]
-    if not genx_required_models_ok:
-        missing_required.append("GenX required models")
 
     return {
         "providers": providers,
@@ -574,19 +643,166 @@ async def get_readiness(
         "genx": {
             "configured": genx_configured,
             "health_ok": bool(genx_health.get("ok")),
-            "models_tested": bool(genx_last.get("models_tested", False)),
-            "required_models_ok": genx_required_models_ok,
-            "failed_models": genx_last.get("failed_models", []),
-            "last_checked_at": genx_last.get("checked_at"),
+            "models_tested": bool(_GENX_LAST_TEST_STATE.get(current_user.id, {}).get("models_tested", False)),
+            "required_models_ok": bool(_GENX_LAST_TEST_STATE.get(current_user.id, {}).get("required_models_ok", genx_health.get("ok"))),
+            "failed_models": _GENX_LAST_TEST_STATE.get(current_user.id, {}).get("failed_models", []),
+            "last_checked_at": _GENX_LAST_TEST_STATE.get(current_user.id, {}).get("checked_at"),
             "status": provider_details["genx"]["status"],
         },
         "firecrawl": {
             "configured": firecrawl_configured,
             "status": provider_details["firecrawl"]["status"],
             "last_checked_at": firecrawl_last.get("checked_at"),
-            "error": firecrawl_last.get("error"),
+            "error": "Provider test failed." if provider_details["firecrawl"]["status"] == "test_failed" else None,
         },
-        "social_platforms": {k: posting["platforms"].get(k) for k in PLATFORM_KEYS},
+        "social_platforms": {k: posting.get("platforms", {}).get(k, {}) for k in PLATFORM_KEYS} if isinstance(posting, dict) else {},
         "missing_required": missing_required,
-        "go_live_ready": len(missing_required) == 0 and genx_required_models_ok,
+        "go_live_ready": full_go_live_ready,
+        "generation_readiness": generation_readiness,
+        "scraping_readiness": scraping_readiness,
+        "platform_generation": platform_generation,
+        "posting_readiness": posting_readiness,
+        "beta_go_ready": beta_go_ready,
+        "full_go_live_ready": full_go_live_ready,
     }
+
+
+@router.get("/provider-resolution")
+async def provider_resolution(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    providers = ["GENX_API_KEY", "FIRECRAWL_API_KEY", "QWEN_API_KEY", "HUGGINGFACE_TOKEN", "OPENAI_API_KEY", "GEMINI_API_KEY"]
+    resolved = {}
+    for key_name in providers:
+        key_value, source = _resolve_provider_key(db, current_user.id, key_name, getattr(settings, key_name, "") or "")
+        resolved[key_name] = {
+            "effective_source": source,
+            "masked_value": mask_value(key_value),
+        }
+    return {"providers": resolved}
+
+
+@router.post("/genx/debug-test")
+async def genx_debug_test(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    api_key, source = _resolve_provider_key(db, current_user.id, "GENX_API_KEY", settings.GENX_API_KEY)
+    base_url = settings.GENX_BASE_URL
+    model = settings.GENX_DEFAULT_MODEL
+    if not api_key:
+        return {
+            "http_status": 0,
+            "base_url": base_url,
+            "model": model,
+            "response_shape_keys": [],
+            "parsed_text_present": False,
+            "parsed_content_present": False,
+            "sanitized_preview": "",
+            "error": "GENX_API_KEY is missing.",
+            "effective_source": source,
+        }
+    endpoint = f"{base_url.rstrip('/')}/chat/completions"
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": "Reply with one short sentence for debug."}],
+        "max_tokens": 32,
+        "temperature": 0.2,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(
+                endpoint,
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json=payload,
+            )
+        raw = response.json() if "json" in (response.headers.get("content-type", "").lower()) else {"text": response.text[:500]}
+        parsed = _extract_genx_text(raw if isinstance(raw, dict) else {})
+        preview = _safe_preview(parsed or str(raw)[:300])
+        return {
+            "http_status": response.status_code,
+            "base_url": base_url,
+            "model": model,
+            "response_shape_keys": sorted(list(raw.keys())) if isinstance(raw, dict) else [],
+            "parsed_text_present": bool(parsed),
+            "parsed_content_present": bool(parsed),
+            "sanitized_preview": preview,
+            "error": None if response.status_code < 400 and parsed else ("No response text parsed." if response.status_code < 400 else "GenX request failed."),
+            "effective_source": source,
+        }
+    except Exception as exc:
+        logger.warning("GenX debug test failed for user %s: %s", current_user.id, type(exc).__name__)
+        return {
+            "http_status": 0,
+            "base_url": base_url,
+            "model": model,
+            "response_shape_keys": [],
+            "parsed_text_present": False,
+            "parsed_content_present": False,
+            "sanitized_preview": "",
+            "error": "GenX request failed.",
+            "effective_source": source,
+        }
+
+
+@router.post("/firecrawl/debug-test")
+async def firecrawl_debug_test(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    api_key, source = _resolve_provider_key(db, current_user.id, "FIRECRAWL_API_KEY", settings.FIRECRAWL_API_KEY)
+    base_url = "https://api.firecrawl.dev/v2/scrape"
+    if not api_key:
+        return {
+            "http_status": 0,
+            "base_url": base_url,
+            "response_shape_keys": [],
+            "parsed_text_present": False,
+            "parsed_content_present": False,
+            "sanitized_preview": "",
+            "error": "FIRECRAWL_API_KEY is missing.",
+            "effective_source": source,
+        }
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(
+                base_url,
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={"url": "https://example.com", "formats": ["markdown", "html"]},
+            )
+        raw = response.json() if "json" in (response.headers.get("content-type", "").lower()) else {"text": response.text[:500]}
+        content = ""
+        if isinstance(raw, dict):
+            data = raw.get("data", {}) if isinstance(raw.get("data"), dict) else {}
+            content = str(
+                data.get("markdown")
+                or data.get("html")
+                or data.get("content")
+                or raw.get("markdown")
+                or raw.get("html")
+                or raw.get("content")
+                or ""
+            )
+        return {
+            "http_status": response.status_code,
+            "base_url": base_url,
+            "response_shape_keys": sorted(list(raw.keys())) if isinstance(raw, dict) else [],
+            "parsed_text_present": bool(content),
+            "parsed_content_present": bool(content),
+            "sanitized_preview": _safe_preview(content),
+            "error": None if response.status_code < 400 else "Firecrawl request failed.",
+            "effective_source": source,
+        }
+    except Exception as exc:
+        logger.warning("Firecrawl debug test failed for user %s: %s", current_user.id, type(exc).__name__)
+        return {
+            "http_status": 0,
+            "base_url": base_url,
+            "response_shape_keys": [],
+            "parsed_text_present": False,
+            "parsed_content_present": False,
+            "sanitized_preview": "",
+            "error": "Firecrawl request failed.",
+            "effective_source": source,
+        }

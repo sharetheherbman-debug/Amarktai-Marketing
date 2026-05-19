@@ -8,17 +8,9 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.user_api_key import UserIntegration
+from app.services.platform_catalog import LAUNCH_PLATFORMS, normalize_platform
 
-PLATFORM_KEYS = [
-    "facebook",
-    "instagram",
-    "linkedin",
-    "twitter",
-    "tiktok",
-    "youtube",
-    "reddit",
-    "pinterest",
-]
+PLATFORM_KEYS = list(LAUNCH_PLATFORMS)
 
 POSTING_IMPLEMENTED = {
     "facebook": True,
@@ -52,13 +44,6 @@ REQUIRED_PLATFORM_FIELDS = {
     "reddit": {"subreddit"},
     "pinterest": {"board_id"},
 }
-
-
-def normalize_platform(platform: str) -> str:
-    p = (platform or "").strip().lower()
-    if p in {"x", "x/twitter", "twitter/x"}:
-        return "twitter"
-    return p
 
 
 def _oauth_configured(platform: str) -> bool:
@@ -157,14 +142,24 @@ def platform_posting_state(db: Session, user_id: str, platform: str) -> dict[str
 
     return {
         "platform": p,
+        "generate_ready": True,
         "oauth_configured": oauth_configured,
         "user_connected": user_connected,
         "token_valid": token_valid,
         "scopes_ok": scopes_ok,
         "posting_supported": posting_supported,
+        "posting_ready": can_post_now,
         "analytics_supported": analytics_supported,
         "rate_limit_known": rate_limit_known,
         "can_post_now": can_post_now,
+        "status": (
+            "posting_ready"
+            if can_post_now
+            else (
+                "oauth_not_configured" if not oauth_configured
+                else ("oauth_configured" if oauth_configured and not user_connected else ("user_connected" if user_connected and not posting_supported else "posting_not_implemented"))
+            )
+        ),
         "missing": missing,
         "required_scopes": sorted(required_scopes),
         "granted_scopes": sorted(scopes_available),

@@ -9,7 +9,6 @@ from datetime import datetime
 from typing import List, Dict, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -19,6 +18,7 @@ from app.models.user_api_key import UserAPIKey, UserIntegration
 from app.models.user import User
 from app.core.config import settings
 from app.services.provider_catalog import USER_PROVIDER_KEY_NAMES
+from app.services.platform_catalog import launch_platforms
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -140,14 +140,14 @@ async def get_integrations(
     current_user: User = Depends(get_current_user)
 ):
     """Get status of all platform integrations."""
-    platforms = [
-        "youtube", "tiktok", "instagram", "facebook", "twitter", "linkedin",
-        "pinterest", "reddit", "bluesky", "threads", "telegram", "snapchat",
-    ]
-    
-    integrations = db.query(UserIntegration).filter(
-        UserIntegration.user_id == current_user.id
-    ).all()
+    platforms = launch_platforms()
+    integrations = []
+    try:
+        integrations = db.query(UserIntegration).filter(
+            UserIntegration.user_id == current_user.id
+        ).all()
+    except Exception as exc:
+        logger.warning("Integrations query failed for user %s: %s", current_user.id, str(exc)[:300])
     
     integration_map = {i.platform: i for i in integrations}
     
@@ -514,17 +514,8 @@ async def oauth_callback(
 
     db.commit()
 
-    html = f"""
-    <html>
-      <body>
-        <script>
-          if (window.opener) {{
-            window.opener.postMessage({{ type: "amarktai-oauth-complete", platform: "{platform}", ok: {str(bool(access_token)).lower()} }}, "{settings.FRONTEND_URL.rstrip('/')}");
-          }}
-          window.close();
-        </script>
-        Connection complete. You can close this window.
-      </body>
-    </html>
-    """
-    return HTMLResponse(html)
+    return {
+        "ok": bool(access_token),
+        "platform": platform,
+        "message": "Connection complete.",
+    }

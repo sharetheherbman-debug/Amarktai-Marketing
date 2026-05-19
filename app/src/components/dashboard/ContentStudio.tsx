@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { 
   Wand2, 
   Image, 
@@ -25,8 +25,8 @@ import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { motion, AnimatePresence } from 'framer-motion';
 import { containerVariants, itemVariants } from '@/lib/motion';
-import { contentApi } from '@/lib/api';
-import type { Platform } from '@/types';
+import { contentApi, webAppApi } from '@/lib/api';
+import type { Platform, WebApp } from '@/types';
 
 interface GeneratedAsset {
   id: string;
@@ -49,7 +49,27 @@ export function ContentStudio() {
   const [selectedStyle, setSelectedStyle] = useState('modern');
   const [intensity, setIntensity] = useState([50]);
   const [selectedPlatform, setSelectedPlatform] = useState<Platform>('instagram');
-  const [webappId] = useState('default');
+  const [webappId, setWebappId] = useState('');
+  const [webapps, setWebapps] = useState<WebApp[]>([]);
+  const [webappLoadError, setWebappLoadError] = useState('');
+
+  useEffect(() => {
+    const loadWebapps = async () => {
+      try {
+        const data = await webAppApi.getAll();
+        setWebapps(data);
+        if (data.length > 0) {
+          setWebappId(data[0].id);
+          setWebappLoadError('');
+        } else {
+          setWebappLoadError('Create a business profile first to generate content.');
+        }
+      } catch {
+        setWebappLoadError('Failed to load business profiles.');
+      }
+    };
+    loadWebapps();
+  }, []);
 
   const styles = [
     { id: 'modern', name: 'Modern', icon: Palette, color: 'from-blue-500 to-cyan-500' },
@@ -70,6 +90,16 @@ export function ContentStudio() {
 
   const handleGenerate = async () => {
     if (!prompt.trim()) return;
+    if (!webappId) {
+      setGeneratedAssets(prev => [{
+        id: Date.now().toString(),
+        type: 'text',
+        prompt,
+        status: 'error',
+        errorMessage: 'No business profile selected. Create/select a business first.',
+      }, ...prev]);
+      return;
+    }
     
     setIsGenerating(true);
     
@@ -195,6 +225,22 @@ export function ContentStudio() {
                 </div>
               </div>
 
+              <div className="space-y-2">
+                <label className="text-sm text-slate-400">Business Profile</label>
+                <select
+                  value={webappId}
+                  onChange={(e) => setWebappId(e.target.value)}
+                  className="w-full rounded-md border border-slate-700 bg-slate-800/50 px-3 py-2 text-sm text-slate-200"
+                >
+                  {webapps.map((w) => (
+                    <option key={w.id} value={w.id}>
+                      {w.name || w.url || w.id}
+                    </option>
+                  ))}
+                </select>
+                {webappLoadError ? <p className="text-xs text-amber-300">{webappLoadError}</p> : null}
+              </div>
+
               {/* Style Selection */}
               <div className="space-y-2">
                 <label className="text-sm text-slate-400">Visual Style</label>
@@ -306,8 +352,8 @@ export function ContentStudio() {
                               <h4 className="font-medium text-slate-200 mb-2">{asset.title}</h4>
                             )}
                             <p className="text-sm text-slate-300 line-clamp-4">{asset.caption || asset.content}</p>
-                            {asset.generationStatus === 'not_configured' && (
-                              <p className="text-xs text-amber-300 mt-2">{asset.generationMessage || 'GENX_API_KEY is not configured. Output is degraded.'}</p>
+                            {asset.generationStatus && asset.generationStatus !== 'genx_success' && (
+                              <p className="text-xs text-amber-300 mt-2">{asset.generationMessage || 'Output is degraded. Review before posting.'}</p>
                             )}
                           </div>
                         )}

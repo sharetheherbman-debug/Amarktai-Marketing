@@ -1,13 +1,15 @@
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel, ConfigDict, model_validator
 from datetime import datetime
 from typing import Optional, List, Any
 
 class WebAppBase(BaseModel):
-    name: str
-    url: HttpUrl
-    description: str
-    category: str
-    target_audience: str
+    model_config = ConfigDict(extra="ignore")
+
+    name: Optional[str] = None
+    url: Optional[str] = None
+    description: Optional[str] = None
+    category: Optional[str] = None
+    target_audience: Optional[str] = None
     key_features: List[str] = []
     logo: Optional[str] = None
     is_active: bool = True
@@ -17,11 +19,17 @@ class WebAppBase(BaseModel):
     scraper_source_urls: Optional[List[str]] = None
 
 class WebAppCreate(WebAppBase):
-    pass
+    @model_validator(mode="after")
+    def validate_name_or_url(self):
+        if not (self.name and self.name.strip()) and not (self.url and self.url.strip()):
+            raise ValueError("Either name or url must be provided.")
+        return self
 
 class WebAppUpdate(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     name: Optional[str] = None
-    url: Optional[HttpUrl] = None
+    url: Optional[str] = None
     description: Optional[str] = None
     category: Optional[str] = None
     target_audience: Optional[str] = None
@@ -43,4 +51,3 @@ class WebApp(WebAppBase):
     
     class Config:
         from_attributes = True
-

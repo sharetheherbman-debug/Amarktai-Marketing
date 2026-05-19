@@ -2,19 +2,15 @@ import { useEffect, useState } from 'react';
 import {
   AlertCircle,
   ArrowRight,
-  Camera,
-  Cloud,
   Instagram,
   Linkedin,
   Loader2,
   MessageCircle,
   Music,
   Pin,
-  Send,
   Twitter,
   Youtube,
   Facebook,
-  AtSign,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
@@ -50,10 +46,6 @@ const platforms = [
   { id: 'linkedin', name: 'LinkedIn', icon: Linkedin },
   { id: 'pinterest', name: 'Pinterest', icon: Pin },
   { id: 'reddit', name: 'Reddit', icon: MessageCircle },
-  { id: 'bluesky', name: 'Bluesky', icon: Cloud },
-  { id: 'threads', name: 'Threads', icon: AtSign },
-  { id: 'telegram', name: 'Telegram', icon: Send },
-  { id: 'snapchat', name: 'Snapchat', icon: Camera },
 ] as const;
 
 export default function PlatformsPage() {

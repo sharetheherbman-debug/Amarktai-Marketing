@@ -4,7 +4,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import type { Content } from '@/types';
 import { contentApi } from '@/lib/api';
@@ -318,6 +318,9 @@ export default function ApprovalPage() {
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>Edit Caption</DialogTitle>
+            <DialogDescription className="sr-only">
+              Edit generated caption text before approving and scheduling the content.
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <Textarea
