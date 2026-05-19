@@ -88,6 +88,7 @@ export interface Content {
   scheduledFor?: string;
   postedAt?: string;
   performance?: ContentPerformance;
+  generationMetadata?: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
 }
@@ -108,6 +109,8 @@ export interface AnalyticsSummary {
   avgCtr: number;
   platformBreakdown: Record<Platform, PlatformStats>;
   dailyStats: DailyStat[];
+  learningActive?: boolean;
+  metricsRecords?: number;
 }
 
 export interface PlatformStats {

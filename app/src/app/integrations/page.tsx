@@ -35,6 +35,14 @@ interface PlatformIntegration {
   low_risk_auto_reply: boolean;
 }
 
+interface ReadinessData {
+  providers: Record<string, string>;
+  oauth: Record<string, string>;
+  checklist: { key: string; label: string; status: string; required: boolean }[];
+  missing_required: string[];
+  go_live_ready: boolean;
+}
+
 const AVAILABLE_API_KEYS = [
   { key: 'GENX_API_KEY', name: 'GenX API Key', description: 'Primary unified AI provider for all AI features (REQUIRED)', provider: 'GenX', required: true },
   { key: 'FIRECRAWL_API_KEY', name: 'Firecrawl API Key', description: 'Web scraping & competitive research (REQUIRED)', provider: 'Firecrawl', required: true },
@@ -68,6 +76,7 @@ export default function IntegrationsPage() {
   const [keyValue, setKeyValue] = useState('');
   const [showKeyValue, setShowKeyValue] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [readiness, setReadiness] = useState<ReadinessData | null>(null);
 
   useEffect(() => {
     fetchData();
@@ -90,6 +99,11 @@ export default function IntegrationsPage() {
       const integrationsRes = await fetch('/api/v1/integrations/platforms', { headers: authHeaders });
       if (integrationsRes.ok) {
         setIntegrations(await integrationsRes.json());
+      }
+
+      const readinessRes = await fetch('/api/v1/settings/readiness', { headers: authHeaders });
+      if (readinessRes.ok) {
+        setReadiness(await readinessRes.json());
       }
     } catch (error) {
       toast.error('Failed to load integrations');
@@ -233,6 +247,51 @@ export default function IntegrationsPage() {
         <h2 className="text-2xl font-bold">API Keys & Integrations</h2>
         <p className="text-gray-500">Connect your accounts and add API keys for enhanced AI generation</p>
       </div>
+
+      {readiness && (
+        <Card className={readiness.go_live_ready ? 'border-green-200 bg-green-50/40' : 'border-amber-200 bg-amber-50/40'}>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <AlertCircle className="w-5 h-5" />
+              Go-live readiness
+            </CardTitle>
+            <CardDescription>
+              Providers and integrations are shown as configured / not_configured. Missing items stay yellow/red until fixed.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex flex-wrap gap-2">
+              {Object.entries(readiness.providers).map(([key, status]) => (
+                <Badge key={key} variant={status === 'configured' ? 'default' : 'outline'}>
+                  {key}: {status}
+                </Badge>
+              ))}
+            </div>
+            <div className="space-y-1 text-sm">
+              {readiness.checklist.map((item) => (
+                <p key={item.key} className={item.status === 'configured' ? 'text-green-700' : 'text-amber-700'}>
+                  {item.required ? '•' : '◦'} {item.label}: {item.status}
+                </p>
+              ))}
+            </div>
+            <div className="space-y-1 text-xs text-gray-600">
+              <p className="font-medium">OAuth credentials</p>
+              <div className="flex flex-wrap gap-2">
+                {Object.entries(readiness.oauth).map(([platform, status]) => (
+                  <Badge key={platform} variant={status === 'configured' ? 'default' : 'outline'}>
+                    {platform}: {status}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+            {!readiness.go_live_ready && (
+              <div className="text-sm text-amber-700">
+                Missing required: {readiness.missing_required.join(', ') || 'none'}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Setup Wizard — shown when no keys added yet */}
       {activeKeysCount === 0 && (

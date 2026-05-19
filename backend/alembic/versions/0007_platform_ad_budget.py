@@ -26,11 +26,11 @@ def upgrade() -> None:
     )
     op.add_column(
         "platform_connections",
-        sa.Column("ad_budget_currency", sa.String(), nullable=True, server_default="USD"),
+        sa.Column("ad_budget_currency", sa.String(length=255), nullable=True, server_default="USD"),
     )
     op.add_column(
         "platform_connections",
-        sa.Column("ad_account_id", sa.String(), nullable=True),
+        sa.Column("ad_account_id", sa.String(length=255), nullable=True),
     )
     op.add_column(
         "platform_connections",

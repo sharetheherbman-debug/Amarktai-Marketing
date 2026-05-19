@@ -1,59 +1,49 @@
-# Pre-Deployment Checklist — builder.amarktai.com
+# Pre-Deployment Checklist — marketing.amarktai.com
 
-Complete every item before calling the production path healthy.
+## Domain and environment
 
-## Shared VPS model
+- [ ] Deploy target is `marketing.amarktai.com`
+- [ ] No deployment step from this repo references the Builder app domain
+- [ ] Repo path is `/var/www/amarktai-marketing/repo`
 
-- [ ] Host Nginx is the only public listener on `:80` and `:443`
-- [ ] Docker Compose exposes only `127.0.0.1:8000` and `127.0.0.1:3000`
-- [ ] PostgreSQL and Redis have no host port bindings
+## Backend (systemd)
 
-## Secrets and env
+- [ ] `backend/.env` exists and is production-ready
+- [ ] `FRONTEND_URL=https://marketing.amarktai.com`
+- [ ] `CORS_ORIGINS=["https://marketing.amarktai.com"]`
+- [ ] `GENX_API_KEY` set (required for full AI generation)
+- [ ] `amarktai-marketing-api.service` installed from `deploy/systemd/amarktai-marketing-api.service`
+- [ ] service runs on `127.0.0.1:8010`
 
-- [ ] Repository root `.env` exists and is **not** committed
-- [ ] Root `.env` contains `POSTGRES_PASSWORD`, `DOMAIN=builder.amarktai.com`, and `VITE_API_URL=/api/v1`
-- [ ] `backend/.env` exists and is **not** committed
-- [ ] `backend/.env` permissions are restricted (`chmod 600 backend/.env`)
-- [ ] `APP_ENVIRONMENT=production`
-- [ ] `FRONTEND_URL=https://builder.amarktai.com`
-- [ ] `CORS_ORIGINS=["https://builder.amarktai.com"]`
-- [ ] `DATABASE_URL=postgresql://amarktai:${POSTGRES_PASSWORD}@db:5432/amarktai`
-- [ ] `REDIS_URL=redis://redis:6379/0`
-- [ ] `JWT_SECRET` is set to a non-default `openssl rand -hex 32` value
-- [ ] `ENCRYPTION_KEY` is set to a non-default `openssl rand -base64 32` value
-- [ ] `STRIPE_WEBHOOK_SECRET` is set for production
-- [ ] `GENX_API_KEY` is set for full AI generation
+## Frontend (static)
 
-## Docker Compose
+- [ ] frontend built with `npm run build`
+- [ ] static files synced to `/var/www/amarktai-marketing/current/app/dist`
 
-- [ ] `docker compose config` exits `0`
-- [ ] `docker compose up -d --build` exits `0`
-- [ ] `docker compose ps` shows `db` and `redis` healthy
-- [ ] `docker compose ps` shows `backend`, `frontend`, `celery_worker`, and `celery_beat` running
+## Database and migrations
 
-## Host Nginx
+- [ ] `alembic upgrade head` completed for clean DB path
+- [ ] `python3 scripts/repair_live_user_columns.py` run for existing live MariaDB if needed
+- [ ] user auth/referral/billing columns present in `users` table
 
-- [ ] `deploy/nginx/builder.amarktai.com.conf` is copied to `/etc/nginx/sites-available/builder.amarktai.com`
-- [ ] `/etc/nginx/sites-enabled/builder.amarktai.com` symlink points to that file
-- [ ] `sudo nginx -t` prints `syntax is ok` and `test is successful`
-- [ ] `sudo systemctl reload nginx` exits `0`
-- [ ] Nginx routes `/api/v1/` to `127.0.0.1:8000`
-- [ ] Nginx routes `/health`, `/docs`, and `/openapi.json` to `127.0.0.1:8000`
-- [ ] Nginx routes all frontend paths to `127.0.0.1:3000`
-- [ ] Nginx forwards `Host`, `X-Real-IP`, `X-Forwarded-For`, and `X-Forwarded-Proto`
+## Nginx
 
-## Smoke tests
+- [ ] `deploy/nginx/marketing.amarktai.com.conf` installed to host Nginx
+- [ ] `/api/v1/` proxies to `127.0.0.1:8010`
+- [ ] `/health`, `/docs`, `/openapi.json` proxy to backend `127.0.0.1:8010`
+- [ ] SPA fallback serves `/index.html` from `/var/www/amarktai-marketing/current/app/dist`
+- [ ] `sudo nginx -t` succeeds
 
-- [ ] `curl -H "Host: builder.amarktai.com" http://127.0.0.1:8000/health` returns `200`
-- [ ] `curl -H "Host: builder.amarktai.com" http://127.0.0.1:8000/api/v1/health` returns `200`
-- [ ] `curl -I http://127.0.0.1:3000/` returns `200`
-- [ ] `curl -I https://builder.amarktai.com/` returns `200`
-- [ ] `curl -I https://builder.amarktai.com/api/v1/health` returns `200`
-- [ ] `curl -I https://builder.amarktai.com/docs` returns `200`
-- [ ] `curl -I https://builder.amarktai.com/openapi.json` returns `200`
-- [ ] `curl -I https://builder.amarktai.com/api/health` returns `404` (expected)
+## Functional checks
+
+- [ ] login works
+- [ ] `/health` returns 200
+- [ ] `/api/v1/health` returns 200
+- [ ] `/dashboard/groups` is disabled safely (coming later / redirect)
+- [ ] settings/integrations readiness truthfully shows configured vs not_configured providers
 
 ## Repeatable verification
 
-- [ ] `chmod +x deploy/verify-builder-go-live.sh`
-- [ ] `DOMAIN=builder.amarktai.com ./deploy/verify-builder-go-live.sh` prints only `PASS` lines and finishes with `All go-live checks passed.`
+- [ ] `./deploy/verify-marketing-go-live.sh` passes
+- [ ] `./scripts/marketing_local_check.sh` passes in local/staging
+- [ ] `./scripts/marketing_go_live_smoke.sh` passes with production domain settings

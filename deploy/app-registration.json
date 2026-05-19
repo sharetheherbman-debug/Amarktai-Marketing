@@ -13,7 +13,7 @@
   "short_description": "Autonomous AI social media marketing platform. Generates and schedules content across 12 platforms powered by Qwen and intelligent automation.",
   "status": "active",
   "access_type": "saas",
-  "primary_url": "https://builder.amarktai.com",
+  "primary_url": "https://marketing.amarktai.com",
   "hosted_here": true,
   "hosting_scope": "subdomain",
   "subdomain": "marketing",
@@ -22,8 +22,8 @@
   "version": "1.0.0",
 
   "integration": {
-    "status_endpoint": "https://builder.amarktai.com/api/amarktai/status",
-    "health_endpoint": "https://builder.amarktai.com/health",
+    "status_endpoint": "https://marketing.amarktai.com/api/amarktai/status",
+    "health_endpoint": "https://marketing.amarktai.com/health",
     "heartbeat_interval_seconds": 300,
     "supported_metric_keys": [
       "total_users",
@@ -52,9 +52,9 @@
   "tech_stack": {
     "frontend": "React 19 + Vite + Tailwind CSS + Framer Motion",
     "backend": "FastAPI (Python 3.11) + PostgreSQL + Redis + Celery",
-    "auth": "Clerk",
-    "ai": "HuggingFace + Qwen2.5",
-    "deployment": "Host Nginx + Docker Compose"
+    "auth": "JWT",
+    "ai": "GenX primary with fallback chain",
+    "deployment": "Host Nginx + systemd backend + static frontend"
   },
 
   "required_env": {

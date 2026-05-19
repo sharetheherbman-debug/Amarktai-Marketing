@@ -28,6 +28,7 @@ interface DashboardStats {
 export default function DashboardPage() {
   const { user } = useAuth();
   const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [learningActive, setLearningActive] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const greeting = (() => {
@@ -53,6 +54,13 @@ export default function DashboardPage() {
         setStats({ postsPublished: 0, engagementRate: '—', leadsCaptures: 0, tokensUsed: 0 });
       })
       .finally(() => setLoading(false));
+
+    fetch('/api/v1/analytics/learning-status', {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+      .then((r) => r.json())
+      .then((d) => setLearningActive(Boolean(d.learning_active)))
+      .catch(() => setLearningActive(false));
   }, []);
 
   const STAT_CARDS = [
@@ -78,6 +86,9 @@ export default function DashboardPage() {
               {greeting}, {user?.name?.split(' ')[0] ?? 'there'} 👋
             </h1>
             <p className="text-[#9AA3B8] text-sm">{dateStr}</p>
+            <p className={`text-xs mt-1 ${learningActive ? "text-emerald-400" : "text-amber-400"}`}>
+              {learningActive ? "Learning active" : "Learning inactive (add/import metrics)"}
+            </p>
           </div>
           <Link
             to="/dashboard/content"

@@ -3,7 +3,7 @@ import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Home, PenTool, CheckSquare, Calendar, BarChart2,
-  MessageCircle, Share2, Zap, Users, Layers, FileText,
+  MessageCircle, Share2, Zap, Users, FileText,
   Plug, Settings, Shield, Menu, X, Bell, ChevronDown,
   LogOut, User, Building2,
 } from 'lucide-react';
@@ -42,7 +42,6 @@ const NAV_SECTIONS = [
       { label: 'AI Tools', href: '/dashboard/tools', icon: Zap },
       { label: 'Blog', href: '/dashboard/blog', icon: FileText },
       { label: 'Leads', href: '/dashboard/leads', icon: Users },
-      { label: 'Groups', href: '/dashboard/groups', icon: Layers },
     ] as NavItem[],
   },
   {
@@ -106,7 +105,6 @@ export default function DashboardLayout() {
       tools: 'AI Tools',
       blog: 'SEO Blog',
       leads: 'Leads',
-      groups: 'Groups',
       integrations: 'Integrations',
       settings: 'Settings',
       admin: 'Admin',

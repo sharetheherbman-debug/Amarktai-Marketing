@@ -113,19 +113,19 @@ npm run dev                 # http://localhost:5173
 
 ## Deployment
 
-Production uses a **shared-VPS Docker Compose** model:
+Current production uses a **host systemd backend + static frontend** model:
 
 - Host Nginx owns public `:80` and `:443`
-- Docker exposes only `127.0.0.1:8000` and `127.0.0.1:3000`
-- PostgreSQL and Redis stay internal to the Compose network
+- Backend systemd service: `amarktai-marketing-api.service` on `127.0.0.1:8010`
+- Frontend static root: `/var/www/amarktai-marketing/current/app/dist`
 
-The PostgreSQL connection string format used throughout is:
+Docker Compose remains available for local/future testing with:
 
-```
-postgresql://amarktai:${POSTGRES_PASSWORD}@db:5432/amarktai
-```
+- `COMPOSE_PROJECT_NAME=amarktai_marketing`
+- no DB/Redis public host port bindings
+- no Docker bindings to public `80/443`
 
-See [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md) for the full `builder.amarktai.com` guide, [DEPLOY_CHECKLIST.md](./DEPLOY_CHECKLIST.md) for the go-live checklist, and `deploy/nginx/builder.amarktai.com.conf` for the host-level Nginx site template.
+See [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md) for the production `marketing.amarktai.com` guide, [DEPLOY_CHECKLIST.md](./DEPLOY_CHECKLIST.md) for the go-live checklist, and `deploy/nginx/marketing.amarktai.com.conf` for the host-level Nginx site template.
 
 ---
 

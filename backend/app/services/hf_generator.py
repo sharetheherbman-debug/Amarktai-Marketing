@@ -25,6 +25,7 @@ from typing import Any
 import httpx
 from app.core.config import settings
 from app.services.genx_client import GenXClient
+from app.services.social_rules import as_prompt_guidance, resolve_platform_key
 
 # Default free model – works on the free/Pro tier without a PRO subscription
 _DEFAULT_MODEL = "mistralai/Mistral-7B-Instruct-v0.2"
@@ -69,6 +70,12 @@ _PLATFORM_HINTS: dict[str, dict[str, str]] = {
         "length": "200-260 characters",
         "hashtag_count": "2-3",
     },
+    "x": {
+        "format": "Tweet / X post",
+        "caption_hint": "punchy, insightful post under 280 characters",
+        "length": "200-260 characters",
+        "hashtag_count": "2-3",
+    },
     "linkedin": {
         "format": "LinkedIn professional post",
         "caption_hint": "thought-leadership post with numbered insights or bullet points",
@@ -104,6 +111,18 @@ _PLATFORM_HINTS: dict[str, dict[str, str]] = {
         "caption_hint": "informative, value-packed message with a clear link or CTA for the channel audience",
         "length": "200-400 characters",
         "hashtag_count": "2-4",
+    },
+    "reels": {
+        "format": "Instagram Reels caption",
+        "caption_hint": "hook-first reel caption with CTA",
+        "length": "120-280 characters",
+        "hashtag_count": "5-10",
+    },
+    "shorts": {
+        "format": "YouTube Shorts description",
+        "caption_hint": "short-form video description with clear CTA",
+        "length": "120-280 characters",
+        "hashtag_count": "4-8",
     },
     "snapchat": {
         "format": "Snapchat Story caption",
@@ -209,8 +228,9 @@ class HuggingFaceGenerator:
         platform: str,
     ) -> dict[str, Any]:
         """Generate a complete content package for one platform."""
-        hint = _PLATFORM_HINTS.get(platform, _PLATFORM_HINTS["instagram"])
-        prompt = self._build_prompt(webapp_data, platform, hint)
+        normalized_platform = resolve_platform_key(platform)
+        hint = _PLATFORM_HINTS.get(normalized_platform, _PLATFORM_HINTS["instagram"])
+        prompt = self._build_prompt(webapp_data, normalized_platform, hint)
         raw = await self._call_text_generation(self._inference_url, prompt)
         return self._parse_response(raw, platform, webapp_data)
 
@@ -945,15 +965,18 @@ Provide a JSON object:
         platform: str,
         hint: dict[str, str],
     ) -> str:
+        normalized_platform = resolve_platform_key(platform)
         name = webapp_data.get("name", "our app")
         description = webapp_data.get("description", "")
         audience = webapp_data.get("target_audience", "general audience")
         features = ", ".join(webapp_data.get("key_features", [])[:4])
         url = webapp_data.get("url", "")
+        social_guidance = as_prompt_guidance(normalized_platform, "b2c")
 
         system = (
             "You are an expert social media copywriter for AmarktAI Marketing. "
-            "You create high-converting content that drives leads and engagement. "
+            "You create high-converting content that drives leads and engagement without spammy repetition. "
+            "Do not claim private algorithm certainty. Follow platform policy-safe guidance. "
             "Always respond with valid JSON only – no markdown, no extra text."
         )
 
@@ -970,6 +993,9 @@ Requirements:
 - Caption length: {hint['length']}
 - Include {hint['hashtag_count']} relevant hashtags
 - The content must drive leads to the website
+- Platform guidance: {social_guidance}
+- Include one natural CTA and avoid repetitive/spammy phrasing
+- If content is risky (regulated claims), keep wording conservative for human review
 - Designed and created by AmarktAI Marketing
 
 Respond ONLY with a JSON object with these exact keys:

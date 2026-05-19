@@ -22,17 +22,17 @@ def upgrade() -> None:
     # Create business_groups table
     op.create_table(
         "business_groups",
-        sa.Column("id", sa.String(), primary_key=True, index=True),
-        sa.Column("user_id", sa.String(), sa.ForeignKey("users.id"), nullable=False, index=True),
-        sa.Column("webapp_id", sa.String(), sa.ForeignKey("webapps.id"), nullable=False, index=True),
+        sa.Column("id", sa.String(length=255), primary_key=True, index=True),
+        sa.Column("user_id", sa.String(length=255), sa.ForeignKey("users.id"), nullable=False, index=True),
+        sa.Column("webapp_id", sa.String(length=255), sa.ForeignKey("webapps.id"), nullable=False, index=True),
         sa.Column(
             "platform",
             sa.Enum("facebook", "reddit", "telegram", "discord", "linkedin", name="groupplatform"),
             nullable=False,
         ),
-        sa.Column("group_id", sa.String(), nullable=True),
-        sa.Column("group_name", sa.String(), nullable=False),
-        sa.Column("group_url", sa.String(), nullable=True),
+        sa.Column("group_id", sa.String(length=255), nullable=True),
+        sa.Column("group_name", sa.String(length=255), nullable=False),
+        sa.Column("group_url", sa.String(length=255), nullable=True),
         sa.Column("description", sa.Text(), nullable=True),
         sa.Column(
             "status",
@@ -46,7 +46,7 @@ def upgrade() -> None:
         sa.Column("total_engagements", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("total_leads", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("avg_interaction_rate", sa.Float(), nullable=False, server_default="0"),
-        sa.Column("keywords_used", sa.String(), nullable=True),
+        sa.Column("keywords_used", sa.String(length=255), nullable=True),
         sa.Column("compliance_note", sa.Text(), nullable=True),
         sa.Column(
             "created_at",
