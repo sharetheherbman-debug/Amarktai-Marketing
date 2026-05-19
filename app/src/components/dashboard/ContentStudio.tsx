@@ -304,7 +304,7 @@ export function ContentStudio() {
                           <div>
                             {asset.title && (
                               <h4 className="font-medium text-slate-200 mb-2">{asset.title}</h4>
-                            )
+                            )}
                             <p className="text-sm text-slate-300 line-clamp-4">{asset.caption || asset.content}</p>
                             {asset.generationStatus === 'not_configured' && (
                               <p className="text-xs text-amber-300 mt-2">{asset.generationMessage || 'GENX_API_KEY is not configured. Output is degraded.'}</p>

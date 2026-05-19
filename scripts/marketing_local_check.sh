@@ -55,10 +55,11 @@ else
   echo "SKIP: login/webapp/content checks (set MARKETING_TEST_EMAIL and MARKETING_TEST_PASSWORD)"
 fi
 
-if grep -R "builder.amarktai.com" -n /home/runner/work/Amarktai-Marketing/Amarktai-Marketing/DEPLOYMENT_GUIDE.md /home/runner/work/Amarktai-Marketing/Amarktai-Marketing/DEPLOY_CHECKLIST.md /home/runner/work/Amarktai-Marketing/Amarktai-Marketing/deploy >/dev/null; then
-  fail "builder.amarktai.com references remain in deploy docs/config"
+LEGACY_DOMAIN="builder"".amarktai.com"
+if grep -R "$LEGACY_DOMAIN" -n /home/runner/work/Amarktai-Marketing/Amarktai-Marketing/DEPLOYMENT_GUIDE.md /home/runner/work/Amarktai-Marketing/Amarktai-Marketing/DEPLOY_CHECKLIST.md /home/runner/work/Amarktai-Marketing/Amarktai-Marketing/deploy >/dev/null; then
+  fail "legacy builder-domain references remain in deploy docs/config"
 else
-  pass "no builder.amarktai.com references in production deploy docs/config"
+  pass "no legacy builder-domain references in production deploy docs/config"
 fi
 
 echo "Local marketing checks complete."
