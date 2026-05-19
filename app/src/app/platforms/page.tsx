@@ -65,7 +65,8 @@ export default function PlatformsPage() {
     const load = async () => {
       try {
         const token = getStoredToken();
-        const headers = token ? { Authorization: `Bearer ${token}` } : {};
+        const headers: Record<string, string> = {};
+        if (token) headers.Authorization = `Bearer ${token}`;
         const [readinessRes, integrationsRes] = await Promise.all([
           fetch('/api/v1/settings/readiness', { headers }),
           fetch('/api/v1/integrations/platforms', { headers }),

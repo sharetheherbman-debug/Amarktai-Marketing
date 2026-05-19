@@ -69,6 +69,7 @@ interface PlatformIntegration {
 interface ReadinessData {
   providers: Record<string, string>;
   provider_details: Record<string, { required: boolean; source: string; status: string; message?: string }>;
+  oauth: Record<string, string>;
   checklist: { key: string; label: string; status: string; required: boolean }[];
   missing_required: string[];
   go_live_ready: boolean;

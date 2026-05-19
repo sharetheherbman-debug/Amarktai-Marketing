@@ -83,12 +83,13 @@ class GenXClient:
                 "error": "GenX returned an empty response during health check.",
             }
         except Exception as exc:
+            logger.warning("GenX health check failed: %s", exc)
             latency_ms = int((time.perf_counter() - started) * 1000)
             return {
                 "ok": False,
                 "latency_ms": latency_ms,
                 "model": self.default_model,
-                "error": str(exc),
+                "error": "GenX health check request failed.",
             }
 
     def _endpoint(self) -> str:
