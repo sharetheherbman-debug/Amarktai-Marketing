@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertCircle, ArrowRight, Building2, Globe, Loader2, Plus, RefreshCw } from 'lucide-react';
+import { AlertCircle, ArrowRight, Building2, Globe, Loader2, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Badge } from '@/components/ui/badge';

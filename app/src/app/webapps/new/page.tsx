@@ -44,11 +44,20 @@ export default function NewBusinessPage() {
 
   const validate = () => {
     const nextErrors: Partial<Record<keyof FormState | 'form', string>> = {};
+    const candidateUrl = form.url.trim();
     if (!form.name.trim() && !form.url.trim()) {
       nextErrors.form = 'Enter at least a business name or a website URL.';
     }
-    if (form.url.trim() && !/^([a-z]+:\/\/)?[\w.-]+(?:\.[\w.-]+)+.*$/i.test(form.url.trim())) {
-      nextErrors.url = 'Enter a valid website URL or bare domain.';
+    if (candidateUrl) {
+      try {
+        const normalized = candidateUrl.includes('://') ? candidateUrl : `https://${candidateUrl}`;
+        const parsed = new URL(normalized);
+        if (!parsed.hostname.includes('.')) {
+          nextErrors.url = 'Enter a valid website URL or bare domain.';
+        }
+      } catch {
+        nextErrors.url = 'Enter a valid website URL or bare domain.';
+      }
     }
     setErrors(nextErrors);
     return Object.keys(nextErrors).length === 0;

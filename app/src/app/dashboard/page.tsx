@@ -8,7 +8,6 @@ import {
   ChevronRight,
   Loader2,
   PenTool,
-  RefreshCw,
   Sparkles,
   Globe,
   Calendar,

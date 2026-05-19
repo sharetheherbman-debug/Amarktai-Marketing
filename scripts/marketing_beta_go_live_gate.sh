@@ -4,7 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 BASE_URL="${BASE_URL:-http://127.0.0.1:8010}"
-BUSINESS_NAME="${BUSINESS_NAME:-Example Business}"
+GENERIC_BUSINESS_NAME="${GENERIC_BUSINESS_NAME:-Beta Flow Business}"
+WEBSITE_BUSINESS_NAME="${WEBSITE_BUSINESS_NAME:-Beta Flow Website Business}"
 BUSINESS_URL="${BUSINESS_URL:-https://example.com}"
 EMAIL="${MARKETING_TEST_EMAIL:-}"
 PASSWORD="${MARKETING_TEST_PASSWORD:-}"
@@ -12,6 +13,20 @@ PASSWORD="${MARKETING_TEST_PASSWORD:-}"
 fail() { echo "NO_GO: $1"; exit 1; }
 warn() { echo "WARN: $1"; }
 pass() { echo "PASS: $1"; }
+json_value() {
+  python3 - <<'PY' "$1" "$2"
+import json,sys
+obj=json.loads(sys.argv[1])
+path=sys.argv[2].split('.')
+cur=obj
+for key in path:
+    if isinstance(cur, list):
+        cur=cur[int(key)]
+    else:
+        cur=cur.get(key)
+print("" if cur is None else cur)
+PY
+}
 
 require_json_http_ok() {
   local label="$1"
@@ -60,6 +75,19 @@ cd "$REPO_ROOT/app"
 npm run build >/dev/null || fail "frontend build"
 pass "frontend build"
 
+if ! grep -R "Add Business" "$REPO_ROOT/app/dist" >/dev/null 2>&1; then fail "built frontend missing Add Business copy"; fi
+pass "frontend contains Add Business"
+if ! grep -R "Content Studio" "$REPO_ROOT/app/dist" >/dev/null 2>&1; then fail "built frontend missing Content Studio copy"; fi
+pass "frontend contains Content Studio"
+
+UNSUPPORTED_FOUND=0
+for label in Bluesky Threads Telegram Snapchat; do
+  if grep -R "$label" "$REPO_ROOT/app/dist" >/dev/null 2>&1; then
+    warn "built frontend still contains unsupported label: $label"
+    UNSUPPORTED_FOUND=1
+  fi
+done
+
 LOGIN_JSON=$(curl -sS -X POST "$BASE_URL/api/v1/auth/login" -H 'Content-Type: application/json' -d "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}" || true)
 TOKEN=$(python3 - <<'PY' "$LOGIN_JSON"
 import json,sys
@@ -72,52 +100,72 @@ PY
 [[ -n "$TOKEN" ]] || fail "login failed"
 pass "login"
 
-require_json_http_ok "provider-resolution" "GET" "/api/v1/settings/provider-resolution" >/tmp/provider_resolution.json
-require_json_http_ok "readiness" "GET" "/api/v1/settings/readiness" >/tmp/readiness.json
-require_json_http_ok "analyze" "POST" "/api/v1/webapps/analyze" "{\"name\":\"$BUSINESS_NAME\",\"url\":\"$BUSINESS_URL\"}" >/tmp/analyze.json
-
-CREATE_JSON=$(require_json_http_ok "create business profile" "POST" "/api/v1/webapps/" "{\"name\":\"$BUSINESS_NAME\",\"url\":\"$BUSINESS_URL\",\"description\":\"Beta gate profile\",\"is_active\":true}")
-WEBAPP_ID=$(python3 - <<'PY' "$CREATE_JSON"
+LIST_JSON=$(require_json_http_ok "webapps list" "GET" "/api/v1/webapps/")
+[[ "$(python3 - <<'PY' "$LIST_JSON"
 import json,sys
 obj=json.loads(sys.argv[1])
-print(obj.get("id",""))
+print(1 if isinstance(obj, list) else 0)
 PY
-)
-[[ -n "$WEBAPP_ID" ]] || fail "webapp id missing after creation"
+)" == "1" ]] || fail "webapps list did not return a JSON array"
 
-INSTAGRAM_JSON=$(require_json_http_ok "generate instagram" "POST" "/api/v1/content/generate?webapp_id=$WEBAPP_ID&platform=instagram")
-FACEBOOK_JSON=$(require_json_http_ok "generate facebook" "POST" "/api/v1/content/generate?webapp_id=$WEBAPP_ID&platform=facebook")
-LINKEDIN_JSON=$(require_json_http_ok "generate linkedin" "POST" "/api/v1/content/generate?webapp_id=$WEBAPP_ID&platform=linkedin")
-GEN_ALL_JSON=$(require_json_http_ok "generate-all launch platforms" "POST" "/api/v1/content/generate-all" "{\"webapp_id\":\"$WEBAPP_ID\"}")
+require_json_http_ok "provider-resolution" "GET" "/api/v1/settings/provider-resolution" >/tmp/provider_resolution.json
+READINESS_JSON=$(require_json_http_ok "readiness" "GET" "/api/v1/settings/readiness")
+ANALYZE_JSON=$(require_json_http_ok "analyze URL" "POST" "/api/v1/webapps/analyze" "{\"name\":\"$WEBSITE_BUSINESS_NAME\",\"url\":\"$BUSINESS_URL\"}")
 
-python3 - <<'PY' "$INSTAGRAM_JSON" "$FACEBOOK_JSON" "$LINKEDIN_JSON" "$GEN_ALL_JSON" || fail "caption/body or metadata validation failed"
+GENERIC_CREATE_JSON=$(require_json_http_ok "create generic business" "POST" "/api/v1/webapps/" "{\"name\":\"$GENERIC_BUSINESS_NAME\",\"description\":\"Beta gate generic business\",\"is_active\":true}")
+GENERIC_WEBAPP_ID=$(json_value "$GENERIC_CREATE_JSON" "id")
+[[ -n "$GENERIC_WEBAPP_ID" ]] || fail "generic business id missing after creation"
+pass "generic business id returned"
+
+WEBSITE_CREATE_JSON=$(require_json_http_ok "create website business" "POST" "/api/v1/webapps/" "{\"name\":\"$WEBSITE_BUSINESS_NAME\",\"url\":\"$BUSINESS_URL\",\"description\":\"Beta gate website business\",\"is_active\":true}")
+WEBSITE_WEBAPP_ID=$(json_value "$WEBSITE_CREATE_JSON" "id")
+[[ -n "$WEBSITE_WEBAPP_ID" ]] || fail "website business id missing after creation"
+pass "website business id returned"
+
+require_json_http_ok "refresh intelligence" "POST" "/api/v1/webapps/$WEBSITE_WEBAPP_ID/refresh-intelligence" >/tmp/refresh_intelligence.json
+require_json_http_ok "platform integrations" "GET" "/api/v1/integrations/platforms" >/tmp/platform_integrations.json
+
+INSTAGRAM_JSON=$(require_json_http_ok "generate instagram" "POST" "/api/v1/content/generate?webapp_id=$WEBSITE_WEBAPP_ID&platform=instagram")
+FACEBOOK_JSON=$(require_json_http_ok "generate facebook" "POST" "/api/v1/content/generate?webapp_id=$WEBSITE_WEBAPP_ID&platform=facebook")
+LINKEDIN_JSON=$(require_json_http_ok "generate linkedin" "POST" "/api/v1/content/generate?webapp_id=$WEBSITE_WEBAPP_ID&platform=linkedin")
+GEN_ALL_JSON=$(require_json_http_ok "generate-all launch platforms" "POST" "/api/v1/content/generate-all" "{\"webapp_id\":\"$WEBSITE_WEBAPP_ID\"}")
+
+python3 - <<'PY' "$ANALYZE_JSON" "$INSTAGRAM_JSON" "$FACEBOOK_JSON" "$LINKEDIN_JSON" "$GEN_ALL_JSON" || fail "analysis or generation validation failed"
 import json,sys
-single=[json.loads(sys.argv[1]),json.loads(sys.argv[2]),json.loads(sys.argv[3])]
-for i,item in enumerate(single):
-    if not (item.get("caption") or item.get("body")):
-        raise SystemExit(f"single generation {i} missing caption/body")
-    meta=item.get("generation_metadata") or {}
-    if "provider_actual" not in meta or "generation_status" not in meta:
-        raise SystemExit(f"single generation {i} missing truthful generation_metadata")
-all_payload=json.loads(sys.argv[4])
+analyze=json.loads(sys.argv[1])
+if "scrape_status" not in analyze:
+    raise SystemExit("analyze missing scrape_status")
+for payload in [json.loads(sys.argv[2]), json.loads(sys.argv[3]), json.loads(sys.argv[4])]:
+    if not (payload.get("caption") or payload.get("body")):
+        raise SystemExit("single generation missing caption/body")
+    meta=payload.get("generation_metadata") or {}
+    for key in ("provider_actual", "generation_status", "cta", "scrape_status"):
+        if key not in meta:
+            raise SystemExit(f"single generation missing {key}")
+all_payload=json.loads(sys.argv[5])
 items=all_payload.get("items") or []
 if not items:
     raise SystemExit("generate-all returned no items")
 for entry in items:
-    if "error" in entry:
+    if entry.get("error"):
         continue
     if not (entry.get("caption") or entry.get("body")):
         raise SystemExit("generate-all item missing caption/body")
     meta=entry.get("generation_metadata") or {}
-    if "provider_actual" not in meta or "generation_status" not in meta:
-        raise SystemExit("generate-all item missing truthful generation_metadata")
+    for key in ("provider_actual", "generation_status"):
+        if key not in meta:
+            raise SystemExit(f"generate-all item missing {key}")
 PY
 
-DEGRADED=$(python3 - <<'PY' "$INSTAGRAM_JSON" "$FACEBOOK_JSON" "$LINKEDIN_JSON" "$GEN_ALL_JSON"
+DEGRADED=$(python3 - <<'PY' "$READINESS_JSON" "$INSTAGRAM_JSON" "$FACEBOOK_JSON" "$LINKEDIN_JSON" "$GEN_ALL_JSON"
 import json,sys
-objs=[json.loads(x) for x in sys.argv[1:4]]
-objs += [i for i in (json.loads(sys.argv[4]).get("items") or []) if "generation_metadata" in i]
-print("1" if any((o.get("generation_metadata") or {}).get("degraded") for o in objs) else "0")
+readiness=json.loads(sys.argv[1])
+objs=[json.loads(sys.argv[2]), json.loads(sys.argv[3]), json.loads(sys.argv[4])]
+objs += [i for i in (json.loads(sys.argv[5]).get("items") or []) if "generation_metadata" in i]
+degraded = any((obj.get("generation_metadata") or {}).get("degraded") for obj in objs)
+if not readiness.get("full_go_live_ready", False):
+    degraded = True
+print("1" if degraded else "0")
 PY
 )
 

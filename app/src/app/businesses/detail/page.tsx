@@ -4,7 +4,6 @@ import {
   AlertCircle,
   ArrowLeft,
   Building2,
-  CheckCircle2,
   Globe,
   Loader2,
   RefreshCw,

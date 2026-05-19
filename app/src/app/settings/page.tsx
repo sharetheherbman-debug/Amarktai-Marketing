@@ -37,7 +37,9 @@ export default function SettingsPage() {
 
   const authHeaders = useCallback(() => {
     const token = localStorage.getItem('amarktai_token');
-    return token ? { Authorization: `Bearer ${token}` } : {};
+    const headers: Record<string, string> = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+    return headers;
   }, []);
 
   const load = useCallback(async () => {
