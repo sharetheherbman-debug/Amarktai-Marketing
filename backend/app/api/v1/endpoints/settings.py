@@ -983,3 +983,157 @@ async def test_huggingface_task(
         "http_status": http_status,
         "provider_error": None if ok else "Hugging Face provider request failed.",
     }
+
+
+# ==================== GenX Sub-Routes ====================
+
+class GenXTestCapabilityRequest(BaseModel):
+    category: str
+    model: str | None = None
+    prompt: str | None = None
+
+
+class GenXModelMappingUpdate(BaseModel):
+    mapping: dict[str, str]
+
+
+_GENX_MODEL_MAPPING: dict[str, dict[str, str]] = {}
+
+
+@router.get("/genx/models")
+async def genx_models(
+    category: str | None = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    from app.services.genx_router_client import GenXRouterClient
+    api_key = resolve_user_api_key(db, current_user.id, "GENX_API_KEY", settings.GENX_API_KEY)
+    client = GenXRouterClient(api_key=api_key)
+    return await client.list_models(category=category)
+
+
+@router.get("/genx/capabilities")
+async def genx_capabilities(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    from app.services.genx_router_client import GenXRouterClient
+    api_key = resolve_user_api_key(db, current_user.id, "GENX_API_KEY", settings.GENX_API_KEY)
+    client = GenXRouterClient(api_key=api_key)
+    configured = client.configured
+    return {
+        "configured": configured,
+        "capabilities": [
+            {"category": "image", "description": "Text-to-image and image editing"},
+            {"category": "video", "description": "Text-to-video, image-to-video"},
+            {"category": "voice", "description": "Text-to-speech and voice cloning"},
+            {"category": "avatar", "description": "Talking avatar generation"},
+            {"category": "text", "description": "LLM text generation via /v1/chat/completions"},
+        ] if configured else [],
+        "note": "Configure GENX_API_KEY to enable GenX generation capabilities.",
+    }
+
+
+@router.get("/genx/model-mapping")
+async def genx_model_mapping(
+    current_user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    return {"mapping": _GENX_MODEL_MAPPING.get(current_user.id, {})}
+
+
+@router.put("/genx/model-mapping")
+async def update_genx_model_mapping(
+    payload: GenXModelMappingUpdate,
+    current_user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    _GENX_MODEL_MAPPING[current_user.id] = payload.mapping
+    return {"ok": True, "mapping": payload.mapping}
+
+
+@router.post("/genx/test-capability")
+async def test_genx_capability(
+    payload: GenXTestCapabilityRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    from app.services.genx_router_client import GenXRouterClient
+    api_key = resolve_user_api_key(db, current_user.id, "GENX_API_KEY", settings.GENX_API_KEY)
+    client = GenXRouterClient(api_key=api_key)
+    return await client.test_capability(payload.category, model=payload.model, prompt=payload.prompt)
+
+
+@router.get("/genx/credits")
+async def genx_credits(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    from app.services.genx_router_client import GenXRouterClient
+    api_key = resolve_user_api_key(db, current_user.id, "GENX_API_KEY", settings.GENX_API_KEY)
+    client = GenXRouterClient(api_key=api_key)
+    return await client.get_credits()
+
+
+@router.get("/genx/pricing")
+async def genx_pricing(
+    category: str | None = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    from app.services.genx_router_client import GenXRouterClient
+    api_key = resolve_user_api_key(db, current_user.id, "GENX_API_KEY", settings.GENX_API_KEY)
+    client = GenXRouterClient(api_key=api_key)
+    return await client.get_pricing(category=category)
+
+
+# ==================== Qwen Sub-Routes ====================
+
+class QwenTestCapabilityRequest(BaseModel):
+    capability: str
+    model: str | None = None
+    prompt: str | None = None
+
+
+@router.get("/qwen/models")
+async def qwen_models(
+    current_user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    from app.services.qwen_model_catalog import qwen_full_catalog
+    return {"ok": True, "catalog": qwen_full_catalog()}
+
+
+@router.get("/qwen/capabilities")
+async def qwen_capabilities(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    from app.services.qwen_model_catalog import qwen_full_catalog
+    api_key = resolve_user_api_key(db, current_user.id, "QWEN_API_KEY", settings.QWEN_API_KEY)
+    catalog = qwen_full_catalog()
+    return {
+        "configured": bool(api_key),
+        "capabilities": [
+            {"category": cat, "model_count": len(models), "models": [m["model_id"] for m in models]}
+            for cat, models in catalog["by_category"].items()
+        ],
+    }
+
+
+@router.post("/qwen/test-capability")
+async def test_qwen_capability(
+    payload: QwenTestCapabilityRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    from app.services.qwen_model_catalog import qwen_full_catalog
+    from app.services.qwen_router import route_qwen_model
+    api_key = resolve_user_api_key(db, current_user.id, "QWEN_API_KEY", settings.QWEN_API_KEY)
+    if not api_key:
+        return {"ok": False, "configured": False, "error": "Qwen not configured — add QWEN_API_KEY"}
+    route = route_qwen_model(payload.capability, budget_mode="auto")
+    return {
+        "ok": True,
+        "configured": True,
+        "capability": payload.capability,
+        "routed_model": route.get("model"),
+        "note": "Live test not implemented — configure Qwen SDK for execution.",
+    }
