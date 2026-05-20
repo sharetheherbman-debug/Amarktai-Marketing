@@ -174,18 +174,23 @@ async def get_integrations(
         if can_post_now:
             status_label = "Ready to post"
             user_message = "OAuth and posting requirements are configured."
+            action_label = "Manage"
         elif not oauth_configured:
             status_label = "OAuth not configured"
             user_message = str(platform_meta.get("user_message", "Content generation is available."))
+            action_label = "Configure OAuth"
         elif not posting_supported:
             status_label = "Generation only"
             user_message = str(platform_meta.get("user_message", "Content generation is available."))
+            action_label = "Generate Content"
         elif not bool(state.get("user_connected", False)):
             status_label = "Posting not configured"
             user_message = "Content generation is available. Connect OAuth to enable posting."
+            action_label = "Connect Account"
         else:
             status_label = "Limited mode"
             user_message = "Content generation is available. Complete posting requirements to publish."
+            action_label = "Complete Setup"
 
         result.append({
             "id": platform,
@@ -197,10 +202,14 @@ async def get_integrations(
             "token_valid": bool(state.get("token_valid", False)),
             "scopes_ok": bool(state.get("scopes_ok", False)),
             "posting_supported": posting_supported,
+            "analytics_supported": platform in {
+                "instagram", "facebook", "linkedin", "twitter", "tiktok", "youtube", "reddit", "pinterest"
+            },
             "can_post_now": can_post_now,
             "missing": missing,
             "status_label": status_label,
             "user_message": user_message,
+            "action_label": action_label,
         })
 
     return result

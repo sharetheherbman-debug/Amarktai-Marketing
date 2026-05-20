@@ -37,5 +37,9 @@ async def worker_status(
                 "configured": media_polling_active,
                 "status": "active" if media_polling_active else "manual_mode",
             },
+            "retry_queue": {
+                "configured": learning_active,
+                "status": "active" if learning_active else "manual_mode",
+            },
         },
     }

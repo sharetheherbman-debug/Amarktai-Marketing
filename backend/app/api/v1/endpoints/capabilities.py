@@ -68,9 +68,4 @@ async def route_capability(
         platform_intelligence={},
         learning_insights={},
     )
-    return {
-        "selected_provider": decision["provider"],
-        "selected_model": decision["model"],
-        "fallback_chain": decision["fallback_chain"],
-        "reason": decision["reason"],
-    }
+    return decision
