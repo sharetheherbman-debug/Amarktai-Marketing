@@ -54,6 +54,8 @@ export function ContentStudio({
   const [filterDate, setFilterDate] = useState<string>('');
   const [rejectTarget, setRejectTarget] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState<string>('');
+  const [previewItem, setPreviewItem] = useState<ContentLibraryItem | null>(null);
+  const [previewTab, setPreviewTab] = useState<'post' | 'ad' | 'assets' | 'video' | 'voice' | 'meta'>('post');
 
   const selectedBusiness = useMemo(() => businesses.find((item) => item.id === businessId) ?? null, [businessId, businesses]);
   const sections = ['Campaign Plan', 'Platform Posts', 'Ads', 'Images / Creatives', 'Video / Shorts', 'YouTube Kit', 'TikTok/Reels Kit', 'Voiceover', 'Talking Avatar', 'Full 12-Platform Campaign Pack', 'Content Library', 'Media Jobs / Assets', 'Schedule', 'Learning Insights'];
@@ -97,8 +99,10 @@ export function ContentStudio({
 
   const refreshItems = useCallback(async () => {
     if (!businessId) return;
-    await loadBusinessItems(businessId);
-  }, [businessId, loadBusinessItems]);
+    const loaded = await contentApi.getByWebapp(businessId);
+    setItems(loaded);
+    setPreviewItem(loaded[0] ?? null);
+  }, [businessId]);
 
   const filteredItems = useMemo(() => {
     return items.filter((item) => {
@@ -386,6 +390,29 @@ export function ContentStudio({
           <CardDescription>Saved generated drafts, pack outputs, media states, and provider/model details.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          {previewItem ? (
+            <div className="rounded-2xl border border-[#252A3A] bg-[#141720] p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-white">{previewItem.previewTitle || previewItem.title || 'Generated preview'}</p>
+                  <p className="text-xs text-slate-400">{previewItem.previewSummary || cardBody(previewItem)}</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {(['post', 'ad', 'assets', 'video', 'voice', 'meta'] as const).map((tab) => (
+                    <button key={tab} type="button" onClick={() => setPreviewTab(tab)} className={`rounded-full border px-2.5 py-1 text-xs ${previewTab === tab ? 'border-blue-500/40 bg-blue-500/10 text-blue-200' : 'border-[#252A3A] bg-[#0D0F14] text-slate-300'}`}>{tab}</button>
+                  ))}
+                </div>
+              </div>
+              <div className="mt-3 rounded-xl border border-[#252A3A] bg-[#0D0F14] p-3 text-sm text-slate-200">
+                {previewTab === 'post' ? previewItem.caption : null}
+                {previewTab === 'ad' ? (previewItem.cta || 'No CTA generated.') : null}
+                {previewTab === 'assets' ? (previewItem.imagePrompt || 'No image prompt generated.') : null}
+                {previewTab === 'video' ? (previewItem.videoScript || previewItem.thumbnailPrompt || 'No video script generated.') : null}
+                {previewTab === 'voice' ? (previewItem.voiceoverScript || previewItem.avatarScript || 'No voice/avatar script generated.') : null}
+                {previewTab === 'meta' ? `Provider: ${previewItem.providerSelected || previewItem.providerActual || 'unknown'} · Model: ${previewItem.modelSelected || previewItem.modelActual || 'unknown'} · Seed: ${previewItem.variationSeed || 'n/a'}` : null}
+              </div>
+            </div>
+          ) : null}
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
             <select value={filterPlatform} onChange={(event) => setFilterPlatform(event.target.value)} className="rounded-xl border border-[#252A3A] bg-[#141720] px-3 py-2 text-sm text-white">
               <option value="all">All platforms</option>
@@ -442,6 +469,7 @@ export function ContentStudio({
                       <Badge className="border border-[#252A3A] bg-[#0D0F14] text-slate-200">{item.providerActual || 'unknown'}</Badge>
                       <Badge className="border border-[#252A3A] bg-[#0D0F14] text-slate-200">{item.modelActual || 'model unknown'}</Badge>
                       <Badge className="border border-[#252A3A] bg-[#0D0F14] text-slate-200">fit {item.platformFitScore ?? 'n/a'}</Badge>
+                      <Badge className="border border-[#252A3A] bg-[#0D0F14] text-slate-200">unique {item.uniquenessScore ?? 'n/a'}</Badge>
                     </div>
                     <div className="rounded-xl border border-[#252A3A] bg-[#0D0F14] p-3 text-xs text-slate-300 space-y-0.5">
                       <p>Business: {item.businessName || selectedBusiness?.name || 'unknown'}</p>
@@ -450,12 +478,21 @@ export function ContentStudio({
                       <p>Media jobs: {item.mediaJobIds.length}</p>
                       <p>Assets: {item.mediaAssetIds.length || item.mediaUrls.length}</p>
                       <p>Asset status: {item.assetGenerationStatus || 'unknown'}</p>
+                      <p>Variation seed: {item.variationSeed || 'n/a'}</p>
+                      <p>Grounding: {item.businessGroundingScore ?? 'n/a'} · Hashtags: {item.hashtagRelevanceScore ?? 'n/a'} · Creative: {item.creativeRelevanceScore ?? 'n/a'}</p>
+                      {item.warnings?.length ? <p className="text-amber-300">Warnings: {item.warnings.join(' | ')}</p> : null}
                       {item.rejectionReason ? <p className="text-red-300">Rejection reason: {item.rejectionReason}</p> : null}
                     </div>
                     <div className="flex flex-wrap gap-2">
+                      <Button size="sm" onClick={() => { setPreviewItem(item); }} className="bg-blue-600 hover:bg-blue-500">
+                        Preview
+                      </Button>
                       <Button size="sm" variant="outline" onClick={async () => { await navigator.clipboard.writeText(cardBody(item)); toast.success('Copied content.'); }} className="border-[#252A3A] bg-transparent text-slate-200 hover:bg-white/5">
                         <Copy className="mr-1 h-3.5 w-3.5" />
                         Copy
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={async () => { try { const feedback = window.prompt('Improve with feedback (optional):') || ''; await contentApi.regenerateItem(item.id, { feedback, avoidPreviousText: [item.caption], variationSeed: `${Date.now()}` }); await refreshItems(); toast.success('Regenerated with new variation.'); } catch { toast.error('Regenerate failed.'); } }} className="border-[#252A3A] bg-transparent text-slate-200 hover:bg-white/5">
+                        Regenerate
                       </Button>
                       <Button size="sm" variant="outline" onClick={async () => { try { await contentApi.improveItem(item.id); await refreshItems(); toast.success('Improved draft created.'); } catch { toast.error('Improve failed.'); } }} className="border-[#252A3A] bg-transparent text-slate-200 hover:bg-white/5">
                         <Wand2 className="mr-1 h-3.5 w-3.5" />

@@ -155,6 +155,7 @@ class Settings(BaseSettings):
     # ==================== WEB SCRAPING ====================
     # Web scraping (optional external provider)
     FIRECRAWL_API_KEY: str = ""
+    PIXABAY_API_KEY: str = ""
     
     # ==================== PAYMENTS ====================
     STRIPE_SECRET_KEY: str = ""

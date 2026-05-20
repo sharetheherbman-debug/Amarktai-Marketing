@@ -158,8 +158,11 @@ function mapContentItem(raw: Record<string, unknown>): ContentLibraryItem {
     format: (c.format as string) ?? 'text_post',
     status: (c.status as string) ?? 'unknown',
     title: (c.title as string) ?? '',
+    previewTitle: c.previewTitle as string | undefined,
+    previewSummary: c.previewSummary as string | undefined,
     caption: (c.caption as string) ?? '',
     body: (c.body as string) ?? (c.caption as string) ?? '',
+    hooks: (c.hooks as string[]) ?? [],
     hashtags: (c.hashtags as string[]) ?? [],
     cta: c.cta as string | undefined,
     imagePrompt: c.imagePrompt as string | undefined,
@@ -174,17 +177,27 @@ function mapContentItem(raw: Record<string, unknown>): ContentLibraryItem {
     providerAttempted: c.providerAttempted as string | undefined,
     providerActual: c.providerActual as string | undefined,
     modelActual: c.modelActual as string | undefined,
+    providerSelected: c.providerSelected as string | undefined,
+    modelSelected: c.modelSelected as string | undefined,
+    fallbackChain: (c.fallbackChain as string[]) ?? [],
     taskUsed: c.taskUsed as string | undefined,
     capabilityUsed: c.capabilityUsed as string | undefined,
     generationStatus: (c.generationStatus as string) ?? (c.status as string) ?? 'unknown',
     degraded: c.degraded === true,
     reason: c.reason as string | undefined,
+    variationSeed: c.variationSeed as string | undefined,
+    uniquenessScore: c.uniquenessScore as number | undefined,
+    businessGroundingScore: c.businessGroundingScore as number | undefined,
+    hashtagRelevanceScore: c.hashtagRelevanceScore as number | undefined,
+    creativeRelevanceScore: c.creativeRelevanceScore as number | undefined,
+    warnings: (c.warnings as string[]) ?? [],
     rejectionReason: c.rejectionReason as string | undefined,
     assetGenerationStatus: c.assetGenerationStatus as string | undefined,
     mediaJobIds: (c.mediaJobIds as string[]) ?? [],
     mediaAssetIds: (c.mediaAssetIds as string[]) ?? [],
     mediaUrls: (c.mediaUrls as string[]) ?? [],
     sourceBusinessSnapshot: c.sourceBusinessSnapshot as Record<string, unknown> | undefined,
+    parentContentId: c.parentContentId as string | undefined,
     createdAt: (c.createdAt as string) ?? '',
     updatedAt: c.updatedAt as string | undefined,
   };
@@ -581,12 +594,65 @@ export const contentApi = {
     });
     return mapContentItem(data);
   },
+
+  regenerateItem: async (
+    id: string,
+    payload?: { feedback?: string; avoidPreviousText?: string[]; variationSeed?: string }
+  ): Promise<ContentLibraryItem> => {
+    const data = await apiFetch<Record<string, unknown>>(`/content/items/${id}/regenerate`, {
+      method: 'POST',
+      body: JSON.stringify({
+        feedback: payload?.feedback,
+        avoid_previous_text: payload?.avoidPreviousText ?? [],
+        variation_seed: payload?.variationSeed,
+      }),
+    });
+    return mapContentItem(data);
+  },
+
+  preview: async (payload: {
+    webappId: string;
+    platform: Platform;
+    format?: string;
+    objective?: string;
+    tone?: string;
+    audience?: string;
+    offer?: string;
+    productFocus?: string;
+  }): Promise<Record<string, unknown>> => {
+    return apiFetch('/content/preview', {
+      method: 'POST',
+      body: JSON.stringify({
+        webapp_id: payload.webappId,
+        platform: payload.platform,
+        format: payload.format ?? 'text_post',
+        objective: payload.objective,
+        tone: payload.tone,
+        audience: payload.audience,
+        offer: payload.offer,
+        product_focus: payload.productFocus ?? payload.offer,
+      }),
+    });
+  },
 };
 
 export const settingsApi = {
   getReadiness: async (): Promise<Record<string, unknown>> => apiFetch('/settings/readiness'),
   getProviderResolution: async (): Promise<Record<string, unknown>> => apiFetch('/settings/provider-resolution'),
   getProvidersDebug: async (): Promise<Record<string, unknown>> => apiFetch('/settings/providers/debug'),
+};
+
+export const mediaApi = {
+  pixabaySearch: async (params: { q?: string; category?: string; platform?: string; businessId?: string }) => {
+    const qs = new URLSearchParams();
+    if (params.q) qs.set('q', params.q);
+    if (params.category) qs.set('category', params.category);
+    if (params.platform) qs.set('platform', params.platform);
+    if (params.businessId) qs.set('business_id', params.businessId);
+    return apiFetch(`/media/pixabay/search?${qs.toString()}`);
+  },
+  createAsset: async (payload: Record<string, unknown>) => apiFetch('/media/assets', { method: 'POST', body: JSON.stringify(payload) }),
+  attachAsset: async (contentId: string, assetId: string) => apiFetch(`/media/content/items/${contentId}/attach-asset`, { method: 'POST', body: JSON.stringify({ asset_id: assetId }) }),
 };
 
 export const learningApi = {

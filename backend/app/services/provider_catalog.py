@@ -49,6 +49,13 @@ USER_PROVIDER_KEYS: list[dict[str, Any]] = [
         "required": False,
         "description": "Optional fallback provider.",
     },
+    {
+        "key_name": "PIXABAY_API_KEY",
+        "label": "Pixabay API Key",
+        "provider": "Pixabay",
+        "required": False,
+        "description": "Optional first-class asset provider for images and videos.",
+    },
 ]
 
 USER_PROVIDER_KEY_NAMES = {item["key_name"] for item in USER_PROVIDER_KEYS}
@@ -92,6 +99,13 @@ GLOBAL_ENV_KEYS: list[dict[str, Any]] = [
     {
         "key_name": "GEMINI_API_KEY",
         "label": "Global Gemini API Key",
+        "group": "Global provider fallback",
+        "required": False,
+        "secret": True,
+    },
+    {
+        "key_name": "PIXABAY_API_KEY",
+        "label": "Global Pixabay API Key",
         "group": "Global provider fallback",
         "required": False,
         "secret": True,

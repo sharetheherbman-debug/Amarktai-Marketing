@@ -90,4 +90,15 @@
 
 - [ ] FULL_AUTONOMY_READY depends on live provider/model validity, OAuth scopes, and worker runtime in deployment.
 
+## Production truth reset + Pixabay phase
+- [x] Provider/platform truth tightened to prevent false connected states
+- [x] User-scoped reset endpoints for keys, integrations, provider state, and launch state
+- [x] Provider diagnostics expanded (resolution + debug payload now include next-action fields)
+- [x] Firecrawl test flow now supports real business URL / `no_test_url` behavior
+- [x] Content preview and regenerate endpoints added with variation metadata
+- [x] Pixabay status/test/search endpoints added, plus truthful unsupported-category responses
+- [x] Media asset save/attach/delete endpoints added
+- [x] Tooling status endpoint added at `GET /api/v1/media/tooling/status`
+- [x] New gate scripts added for reset/platform-truth/preview-regeneration/pixabay
+
 ## No Builder Changes ✅
