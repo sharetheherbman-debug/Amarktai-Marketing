@@ -4,9 +4,11 @@ from datetime import datetime
 from typing import Any
 import json
 import logging
+import re
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Response, UploadFile, status
 from pydantic import BaseModel
+from sqlalchemy import text, inspect
 from sqlalchemy.orm import Session
 import uuid
 
@@ -21,6 +23,30 @@ from app.core.config import settings
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+_WEBAPPS_REQUIRED_COLUMNS: dict[str, str] = {
+    "id": "VARCHAR(36) NOT NULL",
+    "user_id": "VARCHAR(36) NOT NULL",
+    "name": "VARCHAR(255) NOT NULL DEFAULT ''",
+    "url": "VARCHAR(512) NOT NULL DEFAULT ''",
+    "description": "TEXT NOT NULL",
+    "category": "VARCHAR(128) NOT NULL DEFAULT ''",
+    "target_audience": "VARCHAR(512) NOT NULL DEFAULT ''",
+    "key_features": "JSON NULL",
+    "logo": "VARCHAR(512) NULL",
+    "is_active": "BOOLEAN DEFAULT TRUE",
+    "brand_voice": "TEXT NULL",
+    "market_location": "VARCHAR(255) NULL",
+    "content_goals": "TEXT NULL",
+    "scraped_data": "JSON NULL",
+    "scraper_source_urls": "JSON NULL",
+    "media_assets": "JSON NULL",
+    "target_language": "VARCHAR(10) NULL DEFAULT 'en'",
+    "created_at": "DATETIME NULL DEFAULT CURRENT_TIMESTAMP",
+    "updated_at": "DATETIME NULL",
+}
+
+_WEBAPPS_JSON_FIELDS = {"key_features", "scraped_data", "scraper_source_urls", "media_assets"}
 
 
 # ---------------------------------------------------------------------------
@@ -71,14 +97,51 @@ def _sanitize_message(value: Any) -> str:
     return str(value).replace("\n", " ").strip()[:300]
 
 
-def _log_route_exception(route: str, user_id: str | None, exc: Exception) -> None:
+def _extract_db_table_column(exc: Exception) -> tuple[str | None, str | None]:
+    messages: list[str] = []
+    current: Any = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        messages.append(str(current))
+        current = getattr(current, "orig", None) or getattr(current, "__cause__", None)
+    blob = " | ".join(messages)
+
+    patterns = [
+        r"Unknown column '([A-Za-z0-9_]+)\.([A-Za-z0-9_]+)'",
+        r"no such column: ([A-Za-z0-9_]+)\.([A-Za-z0-9_]+)",
+        r"column \"([A-Za-z0-9_]+)\" of relation \"([A-Za-z0-9_]+)\" does not exist",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, blob, flags=re.IGNORECASE)
+        if not match:
+            continue
+        if "relation" in pattern:
+            return match.group(2), match.group(1)
+        return match.group(1), match.group(2)
+    return None, None
+
+
+def _log_route_exception(route: str, user_id: str | None, exc: Exception, failing_field: str | None = None) -> None:
+    db_table, db_column = _extract_db_table_column(exc)
     logger.exception(
-        "webapps route=%s user_id=%s exc=%s message=%s",
+        "webapps route=%s user_id=%s db_table=%s db_column=%s failing_field=%s exc=%s message=%s",
         route,
         user_id or "unknown",
+        db_table or "unknown",
+        db_column or "unknown",
+        failing_field or "none",
         type(exc).__name__,
         _sanitize_message(exc),
     )
+
+
+def _get_webapps_columns(db: Session) -> set[str]:
+    try:
+        table_columns = inspect(db.bind).get_columns("webapps")
+        return {col["name"] for col in table_columns}
+    except Exception:
+        return set()
 
 
 def _parse_json_string(value: str) -> Any:
@@ -155,8 +218,7 @@ def _iso_datetime(value: Any) -> str | None:
     return None
 
 
-def serialize_webapp(model: WebAppModel) -> dict[str, Any]:
-    content_goals_value = model.content_goals
+def _coerce_content_goals(content_goals_value: Any) -> str:
     if isinstance(content_goals_value, list):
         content_goals_value = ", ".join([str(v).strip() for v in content_goals_value if str(v).strip()])
     elif isinstance(content_goals_value, str):
@@ -169,27 +231,179 @@ def serialize_webapp(model: WebAppModel) -> dict[str, Any]:
         content_goals_value = ""
     else:
         content_goals_value = str(content_goals_value)
+    return content_goals_value
 
-    return {
-        "id": model.id,
-        "user_id": model.user_id,
-        "name": (model.name or "").strip(),
-        "url": (model.url or "").strip(),
-        "description": model.description or "",
-        "category": model.category or "",
-        "target_audience": model.target_audience or "",
-        "key_features": _normalize_string_list(model.key_features),
-        "logo": model.logo,
-        "is_active": bool(model.is_active) if model.is_active is not None else True,
-        "scraped_data": _normalize_dict(model.scraped_data),
-        "brand_voice": model.brand_voice,
-        "market_location": model.market_location,
-        "content_goals": content_goals_value,
-        "scraper_source_urls": _normalize_string_list(model.scraper_source_urls),
-        "media_assets": _normalize_media_assets(model.media_assets),
-        "created_at": _iso_datetime(model.created_at),
-        "updated_at": _iso_datetime(model.updated_at),
+
+def _serialize_webapp_data(data: dict[str, Any], route: str, user_id: str | None) -> dict[str, Any]:
+    serialized: dict[str, Any] = {}
+    defaults: dict[str, Any] = {
+        "id": "",
+        "user_id": user_id or "",
+        "name": "",
+        "url": "",
+        "description": "",
+        "category": "",
+        "target_audience": "",
+        "key_features": [],
+        "logo": None,
+        "is_active": True,
+        "scraped_data": None,
+        "brand_voice": None,
+        "market_location": None,
+        "content_goals": "",
+        "scraper_source_urls": [],
+        "media_assets": [],
+        "created_at": None,
+        "updated_at": None,
     }
+    builders: dict[str, Any] = {
+        "id": lambda: str(data.get("id") or ""),
+        "user_id": lambda: str(data.get("user_id") or user_id or ""),
+        "name": lambda: str(data.get("name") or "").strip(),
+        "url": lambda: str(data.get("url") or "").strip(),
+        "description": lambda: str(data.get("description") or ""),
+        "category": lambda: str(data.get("category") or ""),
+        "target_audience": lambda: str(data.get("target_audience") or ""),
+        "key_features": lambda: _normalize_string_list(data.get("key_features")),
+        "logo": lambda: data.get("logo"),
+        "is_active": lambda: bool(data.get("is_active")) if data.get("is_active") is not None else True,
+        "scraped_data": lambda: _normalize_dict(data.get("scraped_data")),
+        "brand_voice": lambda: data.get("brand_voice"),
+        "market_location": lambda: data.get("market_location"),
+        "content_goals": lambda: _coerce_content_goals(data.get("content_goals")),
+        "scraper_source_urls": lambda: _normalize_string_list(data.get("scraper_source_urls")),
+        "media_assets": lambda: _normalize_media_assets(data.get("media_assets")),
+        "created_at": lambda: _iso_datetime(data.get("created_at")),
+        "updated_at": lambda: _iso_datetime(data.get("updated_at")),
+    }
+    for field_name, builder in builders.items():
+        try:
+            serialized[field_name] = builder()
+        except Exception as field_exc:
+            _log_route_exception(route, user_id, field_exc, failing_field=field_name)
+            serialized[field_name] = defaults[field_name]
+    return serialized
+
+
+def serialize_webapp(model: WebAppModel, route: str = "/api/v1/webapps/") -> dict[str, Any]:
+    return _serialize_webapp_data(
+        {
+            "id": model.id,
+            "user_id": model.user_id,
+            "name": model.name,
+            "url": model.url,
+            "description": model.description,
+            "category": model.category,
+            "target_audience": model.target_audience,
+            "key_features": model.key_features,
+            "logo": model.logo,
+            "is_active": model.is_active,
+            "scraped_data": model.scraped_data,
+            "brand_voice": model.brand_voice,
+            "market_location": model.market_location,
+            "content_goals": model.content_goals,
+            "scraper_source_urls": model.scraper_source_urls,
+            "media_assets": model.media_assets,
+            "created_at": model.created_at,
+            "updated_at": model.updated_at,
+        },
+        route=route,
+        user_id=model.user_id,
+    )
+
+def _serialize_webapp_row(row: dict[str, Any], route: str, user_id: str) -> dict[str, Any]:
+    normalized_row = dict(row)
+    for field_name in _WEBAPPS_JSON_FIELDS:
+        value = normalized_row.get(field_name)
+        if isinstance(value, str):
+            normalized_row[field_name] = _parse_json_string(value)
+    return _serialize_webapp_data(normalized_row, route=route, user_id=user_id)
+
+
+def _list_webapps_resilient(db: Session, user_id: str, route: str) -> list[dict[str, Any]]:
+    available_columns = _get_webapps_columns(db)
+    if not available_columns:
+        raise RuntimeError("Could not inspect webapps table columns")
+    missing_columns = [col for col in _WEBAPPS_REQUIRED_COLUMNS if col not in available_columns]
+    if missing_columns:
+        logger.warning(
+            "webapps route=%s user_id=%s schema_missing_columns=%s",
+            route,
+            user_id,
+            ",".join(missing_columns),
+        )
+    select_columns = [col for col in _WEBAPPS_REQUIRED_COLUMNS if col in available_columns]
+    if not select_columns:
+        return []
+    rows = db.execute(
+        text(
+            f"SELECT {', '.join(select_columns)} FROM webapps WHERE user_id = :user_id ORDER BY created_at DESC"
+            if "created_at" in select_columns
+            else f"SELECT {', '.join(select_columns)} FROM webapps WHERE user_id = :user_id"
+        ),
+        {"user_id": user_id},
+    ).mappings().all()
+    return [_serialize_webapp_row(dict(row), route=route, user_id=user_id) for row in rows]
+
+
+def _get_webapp_resilient(db: Session, user_id: str, webapp_id: str, route: str) -> dict[str, Any] | None:
+    available_columns = _get_webapps_columns(db)
+    select_columns = [col for col in _WEBAPPS_REQUIRED_COLUMNS if col in available_columns]
+    if not select_columns:
+        return None
+    row = db.execute(
+        text(
+            f"SELECT {', '.join(select_columns)} FROM webapps WHERE id = :webapp_id AND user_id = :user_id LIMIT 1"
+        ),
+        {"webapp_id": webapp_id, "user_id": user_id},
+    ).mappings().first()
+    if not row:
+        return None
+    return _serialize_webapp_row(dict(row), route=route, user_id=user_id)
+
+
+def _coerce_json_payload(value: Any, fallback: Any) -> str:
+    normalized = value if value is not None else fallback
+    try:
+        return json.dumps(normalized)
+    except Exception:
+        return json.dumps(fallback)
+
+
+def _create_webapp_resilient(
+    db: Session,
+    route: str,
+    user_id: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    available_columns = _get_webapps_columns(db)
+    missing_columns = [col for col in _WEBAPPS_REQUIRED_COLUMNS if col not in available_columns]
+    if missing_columns:
+        logger.warning(
+            "webapps route=%s user_id=%s schema_missing_columns=%s",
+            route,
+            user_id,
+            ",".join(missing_columns),
+        )
+
+    insert_payload = dict(payload)
+    insert_payload["key_features"] = _coerce_json_payload(insert_payload.get("key_features"), [])
+    insert_payload["scraper_source_urls"] = _coerce_json_payload(insert_payload.get("scraper_source_urls"), [])
+    insert_payload["media_assets"] = _coerce_json_payload(insert_payload.get("media_assets"), [])
+    insert_payload["scraped_data"] = _coerce_json_payload(insert_payload.get("scraped_data"), None)
+
+    insert_columns = [col for col in insert_payload if col in available_columns]
+    if not insert_columns:
+        raise RuntimeError("No insertable columns detected for webapps table")
+    sql = text(
+        f"INSERT INTO webapps ({', '.join(insert_columns)}) VALUES ({', '.join(f':{col}' for col in insert_columns)})"
+    )
+    db.execute(sql, {col: insert_payload[col] for col in insert_columns})
+    db.commit()
+    inserted = _get_webapp_resilient(db, user_id=user_id, webapp_id=str(payload["id"]), route=route)
+    if not inserted:
+        raise RuntimeError("Created business but failed to load it")
+    return inserted
 
 
 # ---------------------------------------------------------------------------
@@ -202,12 +416,17 @@ async def get_webapps(
     current_user: User = Depends(get_current_user),
 ):
     """Get all web apps for the current user."""
+    route = "/api/v1/webapps/"
     try:
         webapps = db.query(WebAppModel).filter(WebAppModel.user_id == current_user.id).all()
-        return [serialize_webapp(item) for item in webapps]
+        return [serialize_webapp(item, route=route) for item in webapps]
     except Exception as exc:
-        _log_route_exception("/api/v1/webapps/", current_user.id, exc)
-        raise HTTPException(status_code=500, detail="Failed to load businesses.")
+        _log_route_exception(route, current_user.id, exc)
+        try:
+            return _list_webapps_resilient(db, current_user.id, route=route)
+        except Exception as fallback_exc:
+            _log_route_exception(route, current_user.id, fallback_exc)
+            raise HTTPException(status_code=500, detail="Failed to load businesses.")
 
 @router.get("/{webapp_id}")
 async def get_webapp(
@@ -216,6 +435,7 @@ async def get_webapp(
     current_user: User = Depends(get_current_user),
 ):
     """Get a specific web app by ID."""
+    route = f"/api/v1/webapps/{webapp_id}"
     try:
         webapp = db.query(WebAppModel).filter(
             WebAppModel.id == webapp_id,
@@ -223,12 +443,21 @@ async def get_webapp(
         ).first()
         if not webapp:
             raise HTTPException(status_code=404, detail="Web app not found")
-        return serialize_webapp(webapp)
+        return serialize_webapp(webapp, route=route)
     except HTTPException:
         raise
     except Exception as exc:
-        _log_route_exception(f"/api/v1/webapps/{webapp_id}", current_user.id, exc)
-        raise HTTPException(status_code=500, detail="Failed to load business.")
+        _log_route_exception(route, current_user.id, exc)
+        try:
+            webapp_fallback = _get_webapp_resilient(db, current_user.id, webapp_id, route=route)
+            if webapp_fallback is None:
+                raise HTTPException(status_code=404, detail="Web app not found")
+            return webapp_fallback
+        except HTTPException:
+            raise
+        except Exception as fallback_exc:
+            _log_route_exception(route, current_user.id, fallback_exc)
+            raise HTTPException(status_code=500, detail="Failed to load business.")
 
 @router.post("/", status_code=status.HTTP_201_CREATED)
 async def create_webapp(
@@ -242,6 +471,7 @@ async def create_webapp(
     Immediately queues a background scrape of the webapp URL so the AI has
     rich context before the first content generation run.
     """
+    route = "/api/v1/webapps/"
     try:
         # Admin users bypass all limits
         if not is_admin_user(current_user):
@@ -321,12 +551,47 @@ async def create_webapp(
         if normalized_url:
             background_tasks.add_task(_run_scrape, db_webapp.id)
 
-        return serialize_webapp(db_webapp)
+        return serialize_webapp(db_webapp, route=route)
     except HTTPException:
         raise
     except Exception as exc:
-        _log_route_exception("/api/v1/webapps/", current_user.id, exc)
-        raise HTTPException(status_code=500, detail="Failed to create business.")
+        db.rollback()
+        _log_route_exception(route, current_user.id, exc)
+        try:
+            fallback_payload = {
+                "id": str(uuid.uuid4()),
+                "user_id": current_user.id,
+                "name": inferred_name if "inferred_name" in locals() else (name if "name" in locals() else "Business Profile"),
+                "url": normalized_url if "normalized_url" in locals() else "",
+                "description": description if "description" in locals() else "",
+                "category": category if "category" in locals() else "",
+                "target_audience": target_audience if "target_audience" in locals() else "",
+                "key_features": key_features if "key_features" in locals() else [],
+                "logo": webapp.logo,
+                "is_active": webapp.is_active if webapp.is_active is not None else True,
+                "brand_voice": webapp.brand_voice,
+                "market_location": webapp.market_location,
+                "content_goals": webapp.content_goals,
+                "scraper_source_urls": webapp.scraper_source_urls or [],
+                "media_assets": [],
+                "target_language": "en",
+                "scraped_data": {
+                    "scraped_at": datetime.utcnow().isoformat(),
+                    **intelligence,
+                } if "intelligence" in locals() and intelligence else None,
+            }
+            created = _create_webapp_resilient(
+                db,
+                route=route,
+                user_id=current_user.id,
+                payload=fallback_payload,
+            )
+            if created.get("url"):
+                background_tasks.add_task(_run_scrape, created["id"])
+            return created
+        except Exception as fallback_exc:
+            _log_route_exception(route, current_user.id, fallback_exc)
+            raise HTTPException(status_code=500, detail="Failed to create business.")
 
 
 class AnalyzeBusinessRequest(BaseModel):
