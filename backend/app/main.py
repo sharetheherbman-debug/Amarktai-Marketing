@@ -21,6 +21,10 @@ from app.db.session import engine, Base
 
 logger = logging.getLogger(__name__)
 
+
+def _sanitize_exception_message(exc: Exception | str) -> str:
+    return str(exc).replace("\n", " ").strip()[:300]
+
 # Rate limiter — Redis-backed in production, in-memory in dev.
 # Limits are deliberately generous because content generation runs on a schedule
 # (every 6–8 hours via Celery Beat), not in real-time loops.  The 200/hour and
@@ -133,19 +137,24 @@ def _api_error_payload(request: Request, detail: str, error_code: str, status_co
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     detail = exc.detail if isinstance(exc.detail, str) else "Request failed."
-    logger.warning("HTTPException on %s: %s", request.url.path, str(detail)[:300])
+    logger.warning("HTTPException on %s: %s", request.url.path, _sanitize_exception_message(detail))
     return _api_error_payload(request, str(detail), "http_error", exc.status_code)
 
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    logger.warning("ValidationError on %s: %s", request.url.path, str(exc)[:300])
+    logger.warning("ValidationError on %s: %s", request.url.path, _sanitize_exception_message(exc))
     return _api_error_payload(request, "Validation error.", "validation_error", 422)
 
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
-    logger.exception("Unhandled exception (%s) on %s: %s", type(exc).__name__, request.url.path, str(exc)[:300])
+    logger.exception(
+        "Unhandled exception (%s) on %s: %s",
+        type(exc).__name__,
+        request.url.path,
+        _sanitize_exception_message(exc),
+    )
     return _api_error_payload(request, "Internal server error.", "internal_error", 500)
 
 # ALLOWED_HOSTS enforcement — in production, reject requests whose Host header
