@@ -17,6 +17,7 @@ import type {
   Platform,
   Lead,
   LeadStats,
+  ContentLibraryItem,
 } from '@/types';
 import { getStoredToken } from '@/lib/auth';
 
@@ -139,6 +140,46 @@ function mapContent(raw: Record<string, unknown>): Content {
     generationMetadata: (c.generationMetadata as Record<string, unknown>) ?? undefined,
     createdAt: c.createdAt as string,
     updatedAt: (c.updatedAt as string) ?? c.createdAt as string,
+  };
+}
+
+function mapContentItem(raw: Record<string, unknown>): ContentLibraryItem {
+  const c = toCamel(raw);
+  return {
+    id: c.id as string,
+    userId: c.userId as string,
+    webappId: c.webappId as string,
+    campaignId: c.campaignId as string | undefined,
+    platform: c.platform as Platform,
+    format: (c.format as string) ?? 'text_post',
+    title: c.title as string,
+    caption: (c.caption as string) ?? '',
+    body: (c.body as string) ?? (c.caption as string) ?? '',
+    hashtags: (c.hashtags as string[]) ?? [],
+    cta: c.cta as string | undefined,
+    imagePrompt: c.imagePrompt as string | undefined,
+    videoScript: c.videoScript as string | undefined,
+    shotList: (c.shotList as string[]) ?? [],
+    voiceoverScript: c.voiceoverScript as string | undefined,
+    avatarScript: c.avatarScript as string | undefined,
+    thumbnailPrompt: c.thumbnailPrompt as string | undefined,
+    carouselSlides: (c.carouselSlides as string[]) ?? [],
+    platformFitScore: c.platformFitScore as number | undefined,
+    complianceNotes: (c.complianceNotes as string[]) ?? [],
+    providerAttempted: c.providerAttempted as string | undefined,
+    providerActual: c.providerActual as string | undefined,
+    modelActual: c.modelActual as string | undefined,
+    taskUsed: c.taskUsed as string | undefined,
+    capabilityUsed: c.capabilityUsed as string | undefined,
+    generationStatus: (c.generationStatus as string) ?? 'unknown',
+    degraded: c.degraded === true,
+    reason: c.reason as string | undefined,
+    assetGenerationStatus: c.assetGenerationStatus as string | undefined,
+    mediaJobIds: (c.mediaJobIds as string[]) ?? [],
+    mediaAssetIds: (c.mediaAssetIds as string[]) ?? [],
+    mediaUrls: (c.mediaUrls as string[]) ?? [],
+    createdAt: c.createdAt as string,
+    updatedAt: c.updatedAt as string | undefined,
   };
 }
 
@@ -390,11 +431,130 @@ export const contentApi = {
       }),
     });
   },
+
+  generateCreative: async (payload: {
+    webappId: string;
+    platform: Platform;
+    format?: string;
+    objective?: string;
+    tone?: string;
+    audience?: string;
+    autoSelectFormat?: boolean;
+  }): Promise<Record<string, unknown>> => {
+    return apiFetch('/content/generate-creative', {
+      method: 'POST',
+      body: JSON.stringify({
+        webapp_id: payload.webappId,
+        platform: payload.platform,
+        format: payload.format ?? 'text_post',
+        objective: payload.objective,
+        tone: payload.tone,
+        audience: payload.audience,
+        auto_select_format: payload.autoSelectFormat ?? true,
+      }),
+    });
+  },
+
+  generatePack: async (payload: {
+    webappId: string;
+    platforms?: Platform[];
+    objective?: string;
+    tone?: string;
+    audience?: string;
+    formats?: string[];
+    autoSelectFormats?: boolean;
+  }): Promise<{ count: number; items: Array<Record<string, unknown>> }> => {
+    return apiFetch('/content/generate-pack', {
+      method: 'POST',
+      body: JSON.stringify({
+        webapp_id: payload.webappId,
+        platforms: payload.platforms,
+        objective: payload.objective,
+        tone: payload.tone,
+        audience: payload.audience,
+        formats: payload.formats,
+        auto_select_formats: payload.autoSelectFormats ?? true,
+      }),
+    });
+  },
+
+  listItems: async (filters?: {
+    webappId?: string;
+    platform?: string;
+    format?: string;
+    status?: string;
+    provider?: string;
+    date?: string;
+  }): Promise<ContentLibraryItem[]> => {
+    const qs = new URLSearchParams();
+    if (filters?.webappId) qs.set('webapp_id', filters.webappId);
+    if (filters?.platform) qs.set('platform', filters.platform);
+    if (filters?.format) qs.set('format', filters.format);
+    if (filters?.status) qs.set('status', filters.status);
+    if (filters?.provider) qs.set('provider', filters.provider);
+    if (filters?.date) qs.set('date', filters.date);
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    const data = await apiFetch<Record<string, unknown>[]>(`/content/items${suffix}`);
+    return data.map(mapContentItem);
+  },
+
+  getItemById: async (id: string): Promise<ContentLibraryItem | null> => {
+    try {
+      const data = await apiFetch<Record<string, unknown>>(`/content/items/${id}`);
+      return mapContentItem(data);
+    } catch {
+      return null;
+    }
+  },
+
+  getByWebapp: async (webappId: string): Promise<ContentLibraryItem[]> => {
+    const data = await apiFetch<Record<string, unknown>[]>(`/content/webapp/${webappId}`);
+    return data.map(mapContentItem);
+  },
+
+  deleteItem: async (id: string): Promise<void> => {
+    await apiFetch<void>(`/content/items/${id}?confirm=true`, { method: 'DELETE' });
+  },
+
+  scheduleItem: async (id: string, scheduledFor?: string): Promise<ContentLibraryItem> => {
+    const data = await apiFetch<Record<string, unknown>>(`/content/items/${id}/schedule`, {
+      method: 'POST',
+      body: JSON.stringify({ scheduled_for: scheduledFor }),
+    });
+    return mapContentItem(data);
+  },
+
+  duplicateItem: async (id: string): Promise<ContentLibraryItem> => {
+    const data = await apiFetch<Record<string, unknown>>(`/content/items/${id}/duplicate`, { method: 'POST' });
+    return mapContentItem(data);
+  },
+
+  improveItem: async (
+    id: string,
+    payload?: { objective?: string; tone?: string; audience?: string }
+  ): Promise<ContentLibraryItem> => {
+    const data = await apiFetch<Record<string, unknown>>(`/content/items/${id}/improve`, {
+      method: 'POST',
+      body: JSON.stringify(payload ?? {}),
+    });
+    return mapContentItem(data);
+  },
 };
 
 export const settingsApi = {
   getReadiness: async (): Promise<Record<string, unknown>> => apiFetch('/settings/readiness'),
   getProviderResolution: async (): Promise<Record<string, unknown>> => apiFetch('/settings/provider-resolution'),
+};
+
+export const learningApi = {
+  getStatus: async (): Promise<Record<string, unknown>> => apiFetch('/learning/status'),
+  getInsights: async (webappId?: string): Promise<Record<string, unknown>> => (
+    webappId ? apiFetch(`/learning/insights/${webappId}`) : apiFetch('/learning/insights')
+  ),
+  runNow: async (webappId?: string): Promise<Record<string, unknown>> => apiFetch('/learning/run-now', {
+    method: 'POST',
+    body: JSON.stringify({ webapp_id: webappId }),
+  }),
 };
 
 // ─── Analytics ───────────────────────────────────────────────────────────────

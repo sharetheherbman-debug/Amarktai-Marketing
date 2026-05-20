@@ -4,6 +4,7 @@ import {
   AlertCircle,
   ArrowLeft,
   Building2,
+  Calendar,
   Globe,
   Loader2,
   RefreshCw,
@@ -25,8 +26,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { contentApi, webAppApi } from '@/lib/api';
-import type { Content, Platform, WebApp } from '@/types';
+import { contentApi, learningApi, webAppApi } from '@/lib/api';
+import type { ContentLibraryItem, Platform, WebApp } from '@/types';
 
 const platforms: Array<{ id: Platform; label: string }> = [
   { id: 'instagram', label: 'Generate Instagram' },
@@ -39,7 +40,8 @@ export default function BusinessDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [business, setBusiness] = useState<WebApp | null>(null);
-  const [recentContent, setRecentContent] = useState<Content[]>([]);
+  const [recentContent, setRecentContent] = useState<ContentLibraryItem[]>([]);
+  const [learningNotes, setLearningNotes] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -49,7 +51,7 @@ export default function BusinessDetailPage() {
     try {
       const [businessData, content] = await Promise.all([
         webAppApi.getById(id),
-        contentApi.getAll(),
+        contentApi.getByWebapp(id),
       ]);
       if (!businessData) {
         toast.error('Business not found');
@@ -57,7 +59,15 @@ export default function BusinessDetailPage() {
         return;
       }
       setBusiness(businessData);
-      setRecentContent(content.filter((item) => item.webappId === businessData.id).slice(0, 6));
+      setRecentContent(content.slice(0, 8));
+      try {
+        const insights = await learningApi.getInsights(id);
+        const sections = (insights.sections as Record<string, unknown> | undefined) ?? {};
+        const winners = Array.isArray(sections.yesterdays_winners) ? sections.yesterdays_winners : [];
+        setLearningNotes((winners as string[]).slice(0, 4));
+      } catch {
+        setLearningNotes([]);
+      }
     } catch {
       toast.error('Failed to load business');
       navigate('/dashboard/businesses');
@@ -111,6 +121,20 @@ export default function BusinessDetailPage() {
       await load();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Generate all failed');
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const handleGeneratePack = async () => {
+    if (!business) return;
+    setBusyAction('pack');
+    try {
+      const result = await contentApi.generatePack({ webappId: business.id, autoSelectFormats: true });
+      toast.success(`Generated campaign pack with ${result.count} items.`);
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Generate pack failed');
     } finally {
       setBusyAction(null);
     }
@@ -173,6 +197,15 @@ export default function BusinessDetailPage() {
                 {busyAction === 'all' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
                 Generate All Platforms
               </Button>
+              <Button
+                variant="outline"
+                onClick={handleGeneratePack}
+                disabled={busyAction === 'pack'}
+                className="border-[#252A3A] bg-transparent text-slate-200 hover:bg-white/5"
+              >
+                {busyAction === 'pack' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
+                Generate Pack
+              </Button>
             </div>
           </div>
         </CardHeader>
@@ -230,12 +263,12 @@ export default function BusinessDetailPage() {
             </div>
 
             <div className="space-y-4">
-              <Card className="border-[#252A3A] bg-[#141720]">
-                <CardHeader>
-                  <CardTitle className="text-base text-white">Generate platform content</CardTitle>
-                  <CardDescription>Social OAuth is only needed for posting later.</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-3">
+                <Card className="border-[#252A3A] bg-[#141720]">
+                  <CardHeader>
+                    <CardTitle className="text-base text-white">Generate platform content</CardTitle>
+                    <CardDescription>Social OAuth is only needed for posting later.</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
                   {platforms.map((platform) => (
                     <Button
                       key={platform.id}
@@ -248,45 +281,75 @@ export default function BusinessDetailPage() {
                       {platform.label}
                     </Button>
                   ))}
-                  <Link to={`/dashboard/content?business=${business.id}`} className="block">
-                    <Button className="mt-2 w-full bg-blue-600 hover:bg-blue-500">Open Content Studio</Button>
-                  </Link>
-                </CardContent>
-              </Card>
-
-              <Card className="border-[#252A3A] bg-[#141720]">
-                <CardHeader>
-                  <CardTitle className="text-base text-white">Recent drafts</CardTitle>
-                  <CardDescription>Latest content generated for this business.</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  {recentContent.length === 0 ? (
-                    <div className="rounded-xl border border-dashed border-[#252A3A] bg-[#0D0F14] p-4 text-sm text-slate-400">
-                      No drafts yet. Generate Instagram, Facebook, LinkedIn, X/Twitter, or all launch platforms.
+                    <Link to={`/dashboard/content?business=${business.id}`} className="block">
+                      <Button className="mt-2 w-full bg-blue-600 hover:bg-blue-500">Open Content Studio</Button>
+                    </Link>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <Link to={`/dashboard/content?business=${business.id}`} className="block">
+                        <Button variant="outline" className="w-full border-[#252A3A] bg-transparent text-slate-200 hover:bg-white/5">
+                          View Library
+                        </Button>
+                      </Link>
+                      <Link to="/dashboard/scheduler" className="block">
+                        <Button variant="outline" className="w-full border-[#252A3A] bg-transparent text-slate-200 hover:bg-white/5">
+                          <Calendar className="mr-2 h-4 w-4" />
+                          Schedule
+                        </Button>
+                      </Link>
                     </div>
-                  ) : (
-                    recentContent.map((item) => {
-                      const metadata = (item.generationMetadata as Record<string, unknown> | undefined) ?? {};
-                      const degraded = Boolean(metadata.degraded);
-                      return (
-                        <div key={item.id} className="rounded-xl border border-[#252A3A] bg-[#0D0F14] p-4">
-                          <div className="flex items-center justify-between gap-2">
-                            <p className="font-medium capitalize text-white">{item.platform}</p>
-                            <Badge className={degraded ? 'border border-amber-500/30 bg-amber-500/15 text-amber-300' : 'border border-emerald-500/30 bg-emerald-500/15 text-emerald-300'}>
-                              {degraded ? 'Degraded' : 'Ready'}
-                            </Badge>
+                  </CardContent>
+                </Card>
+
+                <Card className="border-[#252A3A] bg-[#141720]">
+                  <CardHeader>
+                    <CardTitle className="text-base text-white">Recent drafts</CardTitle>
+                    <CardDescription>Generated drafts, campaign pack items, media status, and provider details.</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    {recentContent.length === 0 ? (
+                      <div className="rounded-xl border border-dashed border-[#252A3A] bg-[#0D0F14] p-4 text-sm text-slate-400">
+                        No generated content yet. Choose a business and generate your first campaign.
+                      </div>
+                    ) : (
+                      recentContent.map((item) => {
+                        return (
+                          <div key={item.id} className="rounded-xl border border-[#252A3A] bg-[#0D0F14] p-4">
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="font-medium capitalize text-white">{item.platform}</p>
+                              <Badge className={item.degraded ? 'border border-amber-500/30 bg-amber-500/15 text-amber-300' : 'border border-emerald-500/30 bg-emerald-500/15 text-emerald-300'}>
+                                {item.generationStatus.replaceAll('_', ' ')}
+                              </Badge>
+                            </div>
+                            <p className="mt-2 line-clamp-3 text-sm text-slate-300">{item.caption || item.body || item.videoScript || item.imagePrompt || 'No body text available.'}</p>
+                            <div className="mt-3 flex items-center gap-2 text-xs text-slate-400">
+                              <span>{item.providerActual || 'provider unknown'}</span>
+                              <span>• {item.format}</span>
+                              <span>• media jobs {item.mediaJobIds.length}</span>
+                            </div>
                           </div>
-                          <p className="mt-2 line-clamp-3 text-sm text-slate-300">{item.caption}</p>
-                          <div className="mt-3 flex items-center gap-2 text-xs text-slate-400">
-                            {Boolean(metadata.scrape_status) ? <span>Scrape: {String(metadata.scrape_status)}</span> : null}
-                            {Boolean(metadata.generation_status) ? <span>• {String(metadata.generation_status).replaceAll('_', ' ')}</span> : null}
-                          </div>
-                        </div>
-                      );
-                    })
-                  )}
-                </CardContent>
-              </Card>
+                        );
+                      })
+                    )}
+                  </CardContent>
+                </Card>
+
+                <Card className="border-[#252A3A] bg-[#141720]">
+                  <CardHeader>
+                    <CardTitle className="text-base text-white">Learning insights</CardTitle>
+                    <CardDescription>Most recent daily learning recommendations for this business.</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    {learningNotes.length === 0 ? (
+                      <div className="rounded-xl border border-dashed border-[#252A3A] bg-[#0D0F14] p-4 text-sm text-slate-400">
+                        No learning insights yet. Run learning from the dashboard or analytics flow.
+                      </div>
+                    ) : (
+                      <ul className="list-disc space-y-2 pl-5 text-sm text-slate-300">
+                        {learningNotes.map((note) => <li key={note}>{note}</li>)}
+                      </ul>
+                    )}
+                  </CardContent>
+                </Card>
 
               <Card className="border-red-500/30 bg-[#141720]">
                 <CardHeader>

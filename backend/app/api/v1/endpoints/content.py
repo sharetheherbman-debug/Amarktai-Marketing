@@ -12,10 +12,11 @@ Designed and created by AmarktAI Marketing
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import List
 from pydantic import BaseModel
 
-from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, enforce_content_quota
@@ -55,6 +56,16 @@ class GeneratePackRequest(BaseModel):
     audience: str | None = None
     formats: list[str] = ["text_post", "image_prompt", "video_script", "thumbnail_prompt", "talking_avatar_script", "voiceover_script"]
     auto_select_formats: bool = True
+
+
+class ScheduleContentRequest(BaseModel):
+    scheduled_for: str | None = None
+
+
+class ImproveContentRequest(BaseModel):
+    objective: str | None = None
+    tone: str | None = None
+    audience: str | None = None
 
 
 def _extract_intelligence(webapp) -> dict:
@@ -221,6 +232,60 @@ def _truthful_generation_metadata(
     }
 
 
+def _content_type_for_format(fmt: str) -> str:
+    if fmt in {"generated_image", "image_prompt", "thumbnail_prompt"}:
+        return "image"
+    if fmt in {"video_script", "short_video_brief", "youtube_video_kit", "tiktok_reels_kit", "talking_avatar_video"}:
+        return "video"
+    if fmt == "carousel":
+        return "carousel"
+    return "text"
+
+
+def _safe_list(value: object) -> list:
+    return value if isinstance(value, list) else []
+
+
+def _content_item_payload(content: ContentModel) -> dict:
+    metadata = content.generation_metadata or {}
+    return {
+        "id": content.id,
+        "user_id": content.user_id,
+        "webapp_id": content.webapp_id,
+        "campaign_id": metadata.get("campaign_id"),
+        "platform": content.platform,
+        "format": metadata.get("format", content.type.value if hasattr(content.type, "value") else str(content.type)),
+        "title": content.title,
+        "caption": content.caption,
+        "body": content.caption,
+        "hashtags": _safe_list(content.hashtags),
+        "cta": metadata.get("cta"),
+        "image_prompt": metadata.get("image_prompt"),
+        "video_script": metadata.get("video_script"),
+        "shot_list": _safe_list(metadata.get("shot_list")),
+        "voiceover_script": metadata.get("voiceover_script"),
+        "avatar_script": metadata.get("avatar_script"),
+        "thumbnail_prompt": metadata.get("thumbnail_prompt"),
+        "carousel_slides": _safe_list(metadata.get("carousel_slides")),
+        "platform_fit_score": metadata.get("platform_fit_score"),
+        "compliance_notes": _safe_list(metadata.get("terms_policy_warnings")) or _safe_list(metadata.get("compliance_flags")),
+        "provider_attempted": metadata.get("provider_attempted"),
+        "provider_actual": metadata.get("provider_actual"),
+        "model_actual": metadata.get("model_actual") or metadata.get("model"),
+        "task_used": metadata.get("task_used"),
+        "capability_used": metadata.get("capability_used"),
+        "generation_status": metadata.get("generation_status", content.status.value if hasattr(content.status, "value") else str(content.status)),
+        "degraded": bool(metadata.get("degraded")),
+        "reason": metadata.get("reason"),
+        "asset_generation_status": metadata.get("asset_generation_status"),
+        "media_job_ids": _safe_list(metadata.get("media_job_ids")),
+        "media_asset_ids": _safe_list(metadata.get("media_asset_ids")),
+        "media_urls": _safe_list(content.media_urls),
+        "created_at": content.created_at,
+        "updated_at": content.updated_at,
+    }
+
+
 @router.get("/", response_model=List[Content])
 async def get_content(
     content_status: ContentStatus = None,
@@ -231,6 +296,172 @@ async def get_content(
     if content_status:
         query = query.filter(ContentModel.status == content_status)
     return query.order_by(ContentModel.created_at.desc()).all()
+
+
+@router.get("/items")
+async def list_content_items(
+    webapp_id: str | None = None,
+    platform: str | None = None,
+    fmt: str | None = Query(default=None, alias="format"),
+    status: str | None = None,
+    provider: str | None = None,
+    date: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    query = db.query(ContentModel).filter(ContentModel.user_id == current_user.id)
+    if webapp_id:
+        query = query.filter(ContentModel.webapp_id == webapp_id)
+    if platform:
+        query = query.filter(ContentModel.platform == normalize_catalog_platform(platform))
+    rows = query.order_by(ContentModel.created_at.desc()).all()
+    payload = [_content_item_payload(item) for item in rows]
+    if fmt:
+        payload = [item for item in payload if str(item.get("format", "")).lower() == fmt.lower()]
+    if status:
+        payload = [item for item in payload if str(item.get("generation_status", "")).lower() == status.lower()]
+    if provider:
+        payload = [item for item in payload if str(item.get("provider_actual", "")).lower() == provider.lower()]
+    if date:
+        payload = [item for item in payload if item.get("created_at") and str(item["created_at"]).startswith(date)]
+    return payload
+
+
+@router.get("/items/{content_id}")
+async def get_content_item_details(
+    content_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    content = db.query(ContentModel).filter(
+        ContentModel.id == content_id,
+        ContentModel.user_id == current_user.id,
+    ).first()
+    if not content:
+        raise HTTPException(status_code=404, detail="Content not found")
+    return _content_item_payload(content)
+
+
+@router.get("/webapp/{webapp_id}")
+async def get_content_for_webapp(
+    webapp_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    rows = (
+        db.query(ContentModel)
+        .filter(ContentModel.user_id == current_user.id, ContentModel.webapp_id == webapp_id)
+        .order_by(ContentModel.created_at.desc())
+        .all()
+    )
+    return [_content_item_payload(item) for item in rows]
+
+
+@router.delete("/items/{content_id}")
+async def delete_content_item(
+    content_id: str,
+    confirm: bool = False,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not confirm:
+        raise HTTPException(status_code=400, detail="Set confirm=true to delete this content item.")
+    content = db.query(ContentModel).filter(
+        ContentModel.id == content_id,
+        ContentModel.user_id == current_user.id,
+    ).first()
+    if not content:
+        raise HTTPException(status_code=404, detail="Content not found")
+    db.delete(content)
+    db.commit()
+    return {"deleted": True, "id": content_id}
+
+
+@router.post("/items/{content_id}/schedule")
+async def schedule_content_item(
+    content_id: str,
+    payload: ScheduleContentRequest = Body(default_factory=ScheduleContentRequest),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    content = db.query(ContentModel).filter(
+        ContentModel.id == content_id,
+        ContentModel.user_id == current_user.id,
+    ).first()
+    if not content:
+        raise HTTPException(status_code=404, detail="Content not found")
+    scheduled_for = None
+    if payload.scheduled_for:
+        try:
+            scheduled_for = datetime.fromisoformat(payload.scheduled_for.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="scheduled_for must be an ISO datetime.") from exc
+    content.status = ContentStatus.SCHEDULED
+    content.scheduled_for = scheduled_for or (datetime.now(timezone.utc) + timedelta(hours=1))
+    db.commit()
+    db.refresh(content)
+    return _content_item_payload(content)
+
+
+@router.post("/items/{content_id}/duplicate")
+async def duplicate_content_item(
+    content_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    content = db.query(ContentModel).filter(
+        ContentModel.id == content_id,
+        ContentModel.user_id == current_user.id,
+    ).first()
+    if not content:
+        raise HTTPException(status_code=404, detail="Content not found")
+    duplicated = ContentModel(
+        id=str(uuid.uuid4()),
+        user_id=current_user.id,
+        webapp_id=content.webapp_id,
+        platform=content.platform,
+        type=content.type,
+        status=ContentStatus.PENDING,
+        title=f"{content.title} (copy)",
+        caption=content.caption,
+        hashtags=content.hashtags or [],
+        media_urls=content.media_urls or [],
+        generation_metadata={**(content.generation_metadata or {}), "duplicated_from": content.id},
+    )
+    db.add(duplicated)
+    db.commit()
+    db.refresh(duplicated)
+    return _content_item_payload(duplicated)
+
+
+@router.post("/items/{content_id}/improve")
+async def improve_content_item(
+    content_id: str,
+    payload: ImproveContentRequest = Body(default_factory=ImproveContentRequest),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(enforce_content_quota),
+):
+    content = db.query(ContentModel).filter(
+        ContentModel.id == content_id,
+        ContentModel.user_id == current_user.id,
+    ).first()
+    if not content:
+        raise HTTPException(status_code=404, detail="Content not found")
+    improved = await generate_content(
+        webapp_id=content.webapp_id,
+        platform=content.platform,
+        objective=payload.objective,
+        tone=payload.tone,
+        audience=payload.audience,
+        db=db,
+        current_user=current_user,
+    )
+    metadata = dict(improved.generation_metadata or {})
+    metadata["improved_from"] = content.id
+    improved.generation_metadata = metadata
+    db.commit()
+    db.refresh(improved)
+    return _content_item_payload(improved)
 
 
 @router.get("/pending", response_model=List[Content])
@@ -518,6 +749,7 @@ async def generate_creative(
     }
     provider_actual = "template"
     model_or_task = selected_format
+    persisted_content_id: str | None = None
     if selected_format in {"image_prompt", "generated_image"}:
         image_prompt = await generate_image_prompt(webapp_data, payload.platform, qwen_key=qwen_key, hf_token=hf_token, openai_key=openai_key, genx_key=genx_key)
         result["image_prompt"] = image_prompt["image_prompt"]
@@ -586,11 +818,68 @@ async def generate_creative(
         result.update({"text": generated.caption, "hashtags": generated.hashtags, "asset_generation_status": metadata.get("asset_generation_status", "prompt_or_script_only")})
         provider_actual = str(metadata.get("provider_actual", "template"))
         model_or_task = str(metadata.get("model_actual", metadata.get("model", "text-generation")))
+        persisted_content_id = generated.id
 
     content_for_review = result.get("text") or result.get("video_script") or result.get("avatar_script") or result.get("image_prompt") or ""
     platform_review = review_content(platform=payload.platform, content=str(content_for_review))
     generation_status = "genx_failed_qwen_fallback" if genx_key and provider_actual == "qwen" else ("success" if provider_actual != "template" else "template_fallback")
     degraded = generation_status != "success"
+    generation_metadata = {
+        "format": selected_format,
+        "provider_attempted": "genx" if genx_key else ("qwen" if qwen_key else ("huggingface" if hf_token else "template")),
+        "provider_actual": provider_actual,
+        "model_actual": model_or_task,
+        "task_used": selected_format,
+        "capability_used": selected_format,
+        "generation_status": generation_status,
+        "degraded": degraded,
+        "reason": "" if not degraded else "Provider fallback or template output used.",
+        "asset_generation_status": result.get("asset_generation_status", "prompt_or_script_only"),
+        "image_prompt": result.get("image_prompt"),
+        "video_script": result.get("video_script"),
+        "shot_list": result.get("shot_list"),
+        "voiceover_script": result.get("voiceover_script"),
+        "avatar_script": result.get("avatar_script"),
+        "thumbnail_prompt": result.get("thumbnail_prompt"),
+        "carousel_slides": result.get("carousel_slides"),
+        "platform_fit_score": platform_review["platform_fit_score"],
+        "terms_policy_warnings": platform_review["terms_policy_warnings"],
+        "media_job_ids": result.get("media_job_ids", []),
+        "media_asset_ids": result.get("media_asset_ids", []),
+        "warnings": platform_review["risks"],
+        "cta": result.get("cta"),
+    }
+    media_urls = [str(url) for url in [result.get("image_url"), result.get("video_url"), result.get("avatar_url")] if isinstance(url, str) and url]
+    hashtags = _safe_list(result.get("hashtags"))
+    if persisted_content_id is None:
+        db_content = ContentModel(
+            id=str(uuid.uuid4()),
+            user_id=current_user.id,
+            webapp_id=payload.webapp_id,
+            platform=normalize_catalog_platform(payload.platform),
+            type=_content_type_for_format(selected_format),
+            status=ContentStatus.PENDING,
+            title=str(result.get("title") or f"{webapp.name or 'Business'} • {payload.platform.title()}"),
+            caption=str(content_for_review),
+            hashtags=hashtags,
+            media_urls=media_urls,
+            generation_metadata=generation_metadata,
+        )
+        db.add(db_content)
+        db.commit()
+        db.refresh(db_content)
+        persisted_content_id = db_content.id
+    else:
+        existing = db.query(ContentModel).filter(
+            ContentModel.id == persisted_content_id,
+            ContentModel.user_id == current_user.id,
+        ).first()
+        if existing:
+            existing_metadata = dict(existing.generation_metadata or {})
+            existing_metadata.update(generation_metadata)
+            existing.generation_metadata = existing_metadata
+            db.commit()
+            db.refresh(existing)
     return {
         **result,
         "platform_fit_score": platform_review["platform_fit_score"],
@@ -605,6 +894,7 @@ async def generate_creative(
         "warnings": platform_review["risks"],
         "missing_capabilities": [],
         "degraded": degraded,
+        "content_id": persisted_content_id,
     }
 
 

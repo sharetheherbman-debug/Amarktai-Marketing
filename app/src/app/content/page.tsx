@@ -90,7 +90,7 @@ export default function ContentPage() {
         <CardContent className="space-y-3">
           {library.length === 0 ? (
             <div className="rounded-xl border border-dashed border-[#252A3A] bg-[#141720] p-4 text-sm text-slate-400">
-              No drafts yet. Generate content above, then review and schedule it.
+              No generated content yet. Choose a business and generate your first campaign.
             </div>
           ) : (
             library.map((item) => {
@@ -104,8 +104,8 @@ export default function ContentPage() {
                     </div>
                     <div className="flex flex-wrap gap-2">
                       <Badge className="border border-[#252A3A] bg-[#0D0F14] text-slate-200">{String(metadata.scrape_status || 'unknown')}</Badge>
-                      <Badge className={Boolean(metadata.degraded) ? 'border border-amber-500/30 bg-amber-500/15 text-amber-300' : 'border border-emerald-500/30 bg-emerald-500/15 text-emerald-300'}>
-                        {Boolean(metadata.degraded) ? 'Degraded' : 'Ready'}
+                      <Badge className={metadata.degraded === true ? 'border border-amber-500/30 bg-amber-500/15 text-amber-300' : 'border border-emerald-500/30 bg-emerald-500/15 text-emerald-300'}>
+                        {metadata.degraded === true ? 'Degraded' : 'Ready'}
                       </Badge>
                     </div>
                   </div>

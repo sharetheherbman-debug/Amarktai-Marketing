@@ -93,6 +93,43 @@ export interface Content {
   updatedAt: string;
 }
 
+export interface ContentLibraryItem {
+  id: string;
+  userId: string;
+  webappId: string;
+  campaignId?: string;
+  platform: Platform;
+  format: string;
+  title: string;
+  caption: string;
+  body: string;
+  hashtags: string[];
+  cta?: string;
+  imagePrompt?: string;
+  videoScript?: string;
+  shotList: string[];
+  voiceoverScript?: string;
+  avatarScript?: string;
+  thumbnailPrompt?: string;
+  carouselSlides: string[];
+  platformFitScore?: number;
+  complianceNotes: string[];
+  providerAttempted?: string;
+  providerActual?: string;
+  modelActual?: string;
+  taskUsed?: string;
+  capabilityUsed?: string;
+  generationStatus: string;
+  degraded: boolean;
+  reason?: string;
+  assetGenerationStatus?: string;
+  mediaJobIds: string[];
+  mediaAssetIds: string[];
+  mediaUrls: string[];
+  createdAt: string;
+  updatedAt?: string;
+}
+
 export interface ContentPerformance {
   views: number;
   likes: number;

@@ -20,7 +20,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { useAuth } from '@/lib/auth';
 import { useWebapp } from '@/hooks/useWebapp';
 import { contentApi, settingsApi, webAppApi } from '@/lib/api';
-import type { Content } from '@/types';
+import type { Content, ContentLibraryItem } from '@/types';
 
 const steps = [
   { title: 'Add Business', description: 'Start with a business name, website URL, or both.', href: '/dashboard/businesses/new' },
@@ -51,6 +51,7 @@ export default function DashboardPage() {
   const { webapps, activeWebapp, loading, reload } = useWebapp();
   const [readiness, setReadiness] = useState<Record<string, unknown> | null>(null);
   const [recentContent, setRecentContent] = useState<Content[]>([]);
+  const [recentItems, setRecentItems] = useState<ContentLibraryItem[]>([]);
   const [busyAction, setBusyAction] = useState<'analyze' | 'generate-all' | null>(null);
 
   const greetingName = user?.name?.split(' ')[0] ?? 'there';
@@ -64,6 +65,8 @@ export default function DashboardPage() {
         ]);
         setReadiness(readinessData);
         setRecentContent(content.slice(0, 8));
+        const libraryItems = await contentApi.listItems();
+        setRecentItems(libraryItems.slice(0, 12));
       } catch {
         setReadiness(null);
       }
@@ -72,9 +75,19 @@ export default function DashboardPage() {
   }, []);
 
   const selectedContent = useMemo(() => {
-    if (!activeWebapp) return recentContent.slice(0, 4);
-    return recentContent.filter((item) => item.webappId === activeWebapp.id).slice(0, 4);
-  }, [activeWebapp, recentContent]);
+    if (!activeWebapp) return recentItems.slice(0, 4);
+    return recentItems.filter((item) => item.webappId === activeWebapp.id).slice(0, 4);
+  }, [activeWebapp, recentItems]);
+  const activeMediaJobs = useMemo(
+    () => selectedContent.reduce((sum, item) => sum + item.mediaJobIds.length, 0),
+    [selectedContent]
+  );
+  const nextRecommendedAction = useMemo(() => {
+    if (!activeWebapp) return 'Add your first business profile.';
+    if (selectedContent.length === 0) return 'Generate your first campaign draft for the selected business.';
+    if (activeMediaJobs > 0) return 'Review active media jobs and approve completed assets.';
+    return 'Open Scheduler and plan your next posts.';
+  }, [activeWebapp, activeMediaJobs, selectedContent.length]);
 
   const tone = readinessTone(readiness);
   const providerDetails = (readiness?.provider_details as Record<string, { status?: string; message?: string }> | undefined) ?? {};
@@ -141,7 +154,7 @@ export default function DashboardPage() {
         </Card>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[1.3fr_0.7fr]">
+       <div className="grid gap-4 lg:grid-cols-[1.3fr_0.7fr]">
         <Card className="border-[#252A3A] bg-[#0D0F14]">
           <CardHeader>
             <CardTitle>Guided launch flow</CardTitle>
@@ -193,6 +206,27 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       </div>
+
+      <Card className="border-[#252A3A] bg-[#0D0F14]">
+        <CardHeader>
+          <CardTitle>Autonomy status</CardTitle>
+          <CardDescription>Current selected business, active media jobs, and next best action.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3 md:grid-cols-3">
+          <div className="rounded-2xl border border-[#252A3A] bg-[#141720] p-4">
+            <p className="text-xs uppercase tracking-wide text-slate-500">Selected business</p>
+            <p className="mt-2 text-sm text-white">{activeWebapp?.name || 'None selected'}</p>
+          </div>
+          <div className="rounded-2xl border border-[#252A3A] bg-[#141720] p-4">
+            <p className="text-xs uppercase tracking-wide text-slate-500">Active media jobs</p>
+            <p className="mt-2 text-sm text-white">{activeMediaJobs}</p>
+          </div>
+          <div className="rounded-2xl border border-[#252A3A] bg-[#141720] p-4">
+            <p className="text-xs uppercase tracking-wide text-slate-500">Next recommended action</p>
+            <p className="mt-2 text-sm text-white">{nextRecommendedAction}</p>
+          </div>
+        </CardContent>
+      </Card>
 
       {webapps.length === 0 ? (
         <Card className="border-dashed border-blue-500/30 bg-[#0D0F14]">
@@ -305,24 +339,25 @@ export default function DashboardPage() {
             <CardContent className="space-y-3">
               {selectedContent.length === 0 ? (
                 <div className="rounded-2xl border border-dashed border-[#252A3A] bg-[#141720] p-6 text-sm text-slate-400">
-                  No generated content yet. Analyze the business, then generate your first platform draft.
+                  No generated content yet. Choose a business and generate your first campaign.
                 </div>
               ) : (
                 selectedContent.map((item) => {
-                  const metadata = (item.generationMetadata as Record<string, unknown> | undefined) ?? {};
-                  const degraded = Boolean(metadata.degraded);
                   return (
                     <div key={item.id} className="rounded-2xl border border-[#252A3A] bg-[#141720] p-4">
                       <div className="flex items-center justify-between gap-3">
                         <div>
                           <p className="text-sm font-semibold capitalize text-white">{item.platform}</p>
-                          <p className="text-xs text-slate-400">{item.status}</p>
+                          <p className="text-xs text-slate-400">{item.generationStatus}</p>
                         </div>
-                        <Badge className={degraded ? 'border border-amber-500/30 bg-amber-500/15 text-amber-300' : 'border border-emerald-500/30 bg-emerald-500/15 text-emerald-300'}>
-                          {degraded ? 'Degraded' : 'Ready'}
+                        <Badge className={item.degraded ? 'border border-amber-500/30 bg-amber-500/15 text-amber-300' : 'border border-emerald-500/30 bg-emerald-500/15 text-emerald-300'}>
+                          {item.degraded ? 'Degraded' : 'Ready'}
                         </Badge>
                       </div>
-                      <p className="mt-3 line-clamp-3 text-sm text-slate-300">{item.caption}</p>
+                      <p className="mt-3 line-clamp-3 text-sm text-slate-300">{item.caption || item.body || item.videoScript || item.imagePrompt || 'No body text available.'}</p>
+                      <p className="mt-2 text-xs text-slate-400">
+                        {item.providerActual || 'unknown provider'} • media jobs {item.mediaJobIds.length}
+                      </p>
                       <Link to="/dashboard/content" className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-blue-300">
                         Open Content Studio
                         <ArrowRight className="h-3.5 w-3.5" />
