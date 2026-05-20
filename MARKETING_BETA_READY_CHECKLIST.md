@@ -1,0 +1,31 @@
+# Marketing Beta Ready Checklist
+
+- [x] Dashboard shows **Add Business** immediately for users with no businesses
+- [x] Dashboard keeps a persistent **+ Add Business** CTA
+- [x] Dashboard shows a selected business card when businesses exist
+- [x] Dashboard guides the user through Add Business → Analyze Website → Generate Content → Review / Schedule
+- [x] Businesses route exists at `/dashboard/businesses`
+- [x] Add Business route exists at `/dashboard/businesses/new`
+- [x] Business detail route exists at `/dashboard/businesses/:id`
+- [x] Add Business form accepts business name only
+- [x] Add Business form accepts website URL only
+- [x] Add Business form accepts business name + website URL + optional description
+- [x] Bare domains normalize to `https://`
+- [x] Scrape/analyze warnings still preserve the business profile
+- [x] Business detail page exposes Analyze / Refresh Website
+- [x] Business detail page exposes Generate Instagram / Facebook / LinkedIn / X / All Platforms
+- [x] Content Studio shows an empty state with **Add Business** when no business exists
+- [x] Content Studio shows business selector, platform selector, objective, tone, and Generate actions when a business exists
+- [x] Content Studio does not use a hidden default business id
+- [x] Content Studio surfaces API failures in an error card
+- [x] Generated output shows platform, caption/body, CTA, hashtags, generation status, degraded truth, scrape truth, and quick actions
+- [x] Settings is reduced to account, workspace defaults, runtime status, notifications, and danger zone
+- [x] Settings points provider-key editing back to Integrations
+- [x] Integrations is the only editable provider/social connection hub
+- [x] Integrations shows required generation providers, optional fallbacks, and supported social posting connections
+- [x] Active unsupported platform cards are hidden from Integrations UI
+- [x] Beta gate script checks business list, generic business create, URL analyze, generation, generate-all, frontend build, and basic built-output assertions
+- [ ] Live VPS run still needs GenX test confirmation if runtime remains degraded
+- [ ] Live VPS run still needs Firecrawl test confirmation if runtime remains degraded
+- [ ] Live VPS run still needs social posting OAuth confirmation for posting readiness
+- [ ] Live VPS run still needs posting worker/runtime confirmation

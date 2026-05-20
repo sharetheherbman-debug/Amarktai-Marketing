@@ -1,46 +1,32 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { motion, type Variants } from 'framer-motion';
-import { EASE_OUT_CURVE } from '@/lib/motion';
-import {
-  Plus, ExternalLink, Edit2, Trash2, MoreVertical, Power,
-  Globe, RefreshCw, CheckCircle2, AlertCircle, Loader2,
-} from 'lucide-react';
-import { Card, CardContent } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
-import {
-  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
-  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
-import type { WebApp } from '@/types';
-import { webAppApi, scrapeApi } from '@/lib/api';
+import { AlertCircle, ArrowRight, Building2, Globe, Loader2, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 
-const cardVariants: Variants = {
-  hidden: { opacity: 0, y: 20 },
-  show: (i: number) => ({
-    opacity: 1, y: 0,
-    transition: { delay: i * 0.07, duration: 0.45, ease: EASE_OUT_CURVE },
-  }),
-};
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { webAppApi } from '@/lib/api';
+import type { WebApp } from '@/types';
 
-export default function WebAppsPage() {
-  const [webApps, setWebApps] = useState<WebApp[]>([]);
+function scrapeBadge(webapp: WebApp) {
+  const scraped = (webapp.scrapedData as Record<string, unknown> | null | undefined) ?? null;
+  const status = String(scraped?.scrape_status || 'not_started');
+  if (status === 'success') return { label: 'Analyzed', className: 'border border-emerald-500/30 bg-emerald-500/15 text-emerald-300' };
+  if (status === 'partial') return { label: 'Warnings', className: 'border border-amber-500/30 bg-amber-500/15 text-amber-300' };
+  if (status === 'failed') return { label: 'Needs review', className: 'border border-amber-500/30 bg-amber-500/15 text-amber-300' };
+  return { label: 'Not analyzed', className: 'border border-slate-600 bg-slate-800 text-slate-300' };
+}
+
+export default function BusinessListPage() {
+  const [businesses, setBusinesses] = useState<WebApp[]>([]);
   const [loading, setLoading] = useState(true);
-  const [scanningId, setScanningId] = useState<string | null>(null);
-  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [appToDelete, setAppToDelete] = useState<WebApp | null>(null);
+  const [refreshingId, setRefreshingId] = useState<string | null>(null);
 
-  useEffect(() => { fetchWebApps(); }, []);
-
-  const fetchWebApps = async () => {
+  const loadBusinesses = async () => {
     try {
-      const apps = await webAppApi.getAll();
-      setWebApps(apps);
+      const items = await webAppApi.getAll();
+      setBusinesses(items);
     } catch {
       toast.error('Failed to load businesses');
     } finally {
@@ -48,241 +34,139 @@ export default function WebAppsPage() {
     }
   };
 
-  const handleDelete = async () => {
-    if (!appToDelete) return;
-    try {
-      await webAppApi.delete(appToDelete.id);
-      setWebApps(webApps.filter(app => app.id !== appToDelete.id));
-      toast.success('Business deleted successfully');
-    } catch {
-      toast.error('Failed to delete business');
-    } finally {
-      setDeleteDialogOpen(false);
-      setAppToDelete(null);
-    }
-  };
+  useEffect(() => {
+    void loadBusinesses();
+  }, []);
 
-  const handleToggleActive = async (app: WebApp) => {
+  const handleRefresh = async (business: WebApp) => {
+    setRefreshingId(business.id);
     try {
-      await webAppApi.update(app.id, { isActive: !app.isActive });
-      setWebApps(webApps.map(a => a.id === app.id ? { ...a, isActive: !a.isActive } : a));
-      toast.success(app.isActive ? 'Business paused' : 'Business activated');
-    } catch {
-      toast.error('Failed to update business');
-    }
-  };
-
-  const handleRescan = async (app: WebApp) => {
-    setScanningId(app.id);
-    try {
-      const result = await scrapeApi.scrapeWebapp(app.id);
-      const data = result.scraped_data;
-      toast.success(
-        data.status === 'ok'
-          ? `Scanned "${data.title || app.name}" — ${data.headings.length} headings, ${data.paragraphs.length} paragraphs found`
-          : `Scan completed with warning: ${data.error}`
-      );
-      await fetchWebApps();
-    } catch {
-      toast.error('Website scan failed');
+      const result = await webAppApi.refreshIntelligence(business.id);
+      const warnings = (result.intelligence?.warnings as string[] | undefined) ?? [];
+      toast.success(warnings.length > 0 ? 'Business refreshed with warnings.' : 'Business analysis refreshed.');
+      await loadBusinesses();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Business analysis failed');
     } finally {
-      setScanningId(null);
+      setRefreshingId(null);
     }
   };
 
   if (loading) {
     return (
-      <div className="space-y-4">
-        <div className="flex justify-between items-center">
-          <div className="h-8 bg-gray-200 rounded w-32 animate-pulse" />
-          <div className="h-10 bg-gray-200 rounded w-32 animate-pulse" />
-        </div>
-        <div className="grid md:grid-cols-2 gap-4">
-          {[...Array(4)].map((_, i) => (
-            <Card key={i} className="animate-pulse">
-              <CardContent className="p-6">
-                <div className="h-4 bg-gray-200 rounded w-3/4 mb-4" />
-                <div className="h-4 bg-gray-200 rounded w-1/2" />
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+      <div className="flex min-h-[320px] items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-blue-400" />
       </div>
     );
   }
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 className="text-2xl font-bold">Businesses</h2>
-          <p className="text-gray-500">
-            Manage up to 20 businesses the AI promotes across all 12 platforms
-          </p>
+          <h1 className="text-2xl font-bold text-white">Businesses</h1>
+          <p className="mt-2 text-sm text-slate-400">Every business profile feeds website analysis and content generation.</p>
         </div>
-        <Link to="/dashboard/webapps/new">
-          <Button className="bg-gradient-to-r from-violet-600 to-indigo-600">
-            <Plus className="w-4 h-4 mr-2" />
+        <Link to="/dashboard/businesses/new">
+          <Button className="bg-blue-600 hover:bg-blue-500">
+            <Plus className="mr-2 h-4 w-4" />
             Add Business
           </Button>
         </Link>
       </div>
 
-      {webApps.length === 0 ? (
-        <Card>
-          <CardContent className="p-12 text-center">
-            <div className="w-16 h-16 bg-violet-100 rounded-full flex items-center justify-center mx-auto mb-4">
-              <Plus className="w-8 h-8 text-violet-600" />
+      {businesses.length === 0 ? (
+        <Card className="border-dashed border-blue-500/30 bg-[#0D0F14]">
+          <CardContent className="flex flex-col items-start gap-4 p-8">
+            <div className="rounded-2xl bg-blue-500/15 p-3 text-blue-300">
+              <Building2 className="h-6 w-6" />
             </div>
-            <h3 className="text-lg font-semibold mb-2">No businesses yet</h3>
-            <p className="text-gray-500 mb-6 max-w-md mx-auto">
-              Add your first business to start generating AI-powered social media content across all 12 platforms.
-            </p>
-            <Link to="/dashboard/webapps/new">
-              <Button className="bg-gradient-to-r from-violet-600 to-indigo-600">
-                <Plus className="w-4 h-4 mr-2" />
-                Add Your First Business
-              </Button>
+            <div>
+              <h2 className="text-xl font-semibold text-white">Add your first business to start generating content</h2>
+              <p className="mt-2 text-sm text-slate-400">You can use a business name, website URL, or both.</p>
+            </div>
+            <Link to="/dashboard/businesses/new">
+              <Button className="bg-blue-600 hover:bg-blue-500">Add Business</Button>
             </Link>
           </CardContent>
         </Card>
       ) : (
-        <div className="grid md:grid-cols-2 gap-4">
-          {webApps.map((app, i) => {
-            const scraped = (app as any).scrapedData as Record<string, unknown> | null | undefined;
-            const isScanning = scanningId === app.id;
-
+        <div className="grid gap-4 xl:grid-cols-2">
+          {businesses.map((business) => {
+            const status = scrapeBadge(business);
+            const warnings = (((business.scrapedData as Record<string, unknown> | null | undefined)?.warnings) as string[] | undefined) ?? [];
             return (
-              <motion.div
-                key={app.id}
-                custom={i}
-                variants={cardVariants}
-                initial="hidden"
-                animate="show"
-              >
-                <Card className={!app.isActive ? 'opacity-60' : ''}>
-                  <CardContent className="p-6">
-                    <div className="flex items-start justify-between">
-                      <div className="flex items-start space-x-4 flex-1 min-w-0">
-                        <div className="w-12 h-12 bg-gradient-to-br from-violet-500 to-indigo-500 rounded-lg flex items-center justify-center text-white font-bold text-lg flex-shrink-0">
-                          {app.name.charAt(0)}
-                        </div>
-                        <div className="min-w-0">
-                          <div className="flex items-center space-x-2 flex-wrap gap-y-1">
-                            <h3 className="font-semibold">{app.name}</h3>
-                            <Badge variant={app.isActive ? 'default' : 'secondary'}>
-                              {app.isActive ? 'Active' : 'Paused'}
-                            </Badge>
-                          </div>
-                          <a
-                            href={app.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-sm text-violet-600 hover:text-violet-700 flex items-center mt-1"
-                          >
-                            {app.url.replace(/^https?:\/\//, '')}
-                            <ExternalLink className="w-3 h-3 ml-1" />
-                          </a>
-                          <p className="text-sm text-gray-500 mt-2 line-clamp-2">{app.description}</p>
-                          <div className="flex items-center space-x-4 mt-3 text-sm text-gray-500">
-                            <span>{app.category}</span>
-                            <span>•</span>
-                            <span>{app.keyFeatures.length} features</span>
-                          </div>
-
-                          {/* AI Scan status */}
-                          <div className="mt-3">
-                            {isScanning ? (
-                              <span className="inline-flex items-center text-xs text-violet-600 gap-1">
-                                <Loader2 className="w-3 h-3 animate-spin" />
-                                AI scanning website…
-                              </span>
-                            ) : scraped && (scraped as any).status === 'ok' ? (
-                              <span className="inline-flex items-center text-xs text-green-600 gap-1">
-                                <CheckCircle2 className="w-3 h-3" />
-                                AI scan complete — {((scraped as any).headings?.length ?? 0)} headings extracted
-                              </span>
-                            ) : scraped && (scraped as any).error ? (
-                              <span className="inline-flex items-center text-xs text-amber-600 gap-1">
-                                <AlertCircle className="w-3 h-3" />
-                                Scan error — click Re-scan to retry
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center text-xs text-gray-400 gap-1">
-                                <Globe className="w-3 h-3" />
-                                Website not yet scanned
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-1 ml-2">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          title="Re-scan website"
-                          onClick={() => handleRescan(app)}
-                          disabled={isScanning}
-                        >
-                          <RefreshCw className={`w-4 h-4 text-gray-400 ${isScanning ? 'animate-spin' : ''}`} />
-                        </Button>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="icon">
-                              <MoreVertical className="w-4 h-4" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem asChild>
-                              <Link to={`/dashboard/webapps/edit/${app.id}`}>
-                                <Edit2 className="w-4 h-4 mr-2" />
-                                Edit
-                              </Link>
-                            </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => handleToggleActive(app)}>
-                              <Power className="w-4 h-4 mr-2" />
-                              {app.isActive ? 'Pause' : 'Activate'}
-                            </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => handleRescan(app)} disabled={isScanning}>
-                              <RefreshCw className="w-4 h-4 mr-2" />
-                              Re-scan Website
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              className="text-red-600"
-                              onClick={() => { setAppToDelete(app); setDeleteDialogOpen(true); }}
-                            >
-                              <Trash2 className="w-4 h-4 mr-2" />
-                              Delete
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </div>
+              <Card key={business.id} className="border-[#252A3A] bg-[#0D0F14]">
+                <CardHeader>
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <CardTitle className="flex items-center gap-2 text-white">
+                        <Building2 className="h-5 w-5 text-blue-300" />
+                        {business.name || 'Business profile'}
+                      </CardTitle>
+                      <CardDescription className="mt-2 text-slate-400">
+                        {business.url || 'No website URL yet'}
+                      </CardDescription>
                     </div>
-                  </CardContent>
-                </Card>
-              </motion.div>
+                    <Badge className={status.className}>{status.label}</Badge>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <p className="text-sm text-slate-300">{business.description || 'No description yet. Add notes or analyze the website to enrich this profile.'}</p>
+
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="rounded-xl border border-[#252A3A] bg-[#141720] p-3">
+                      <p className="text-xs uppercase tracking-wide text-slate-500">Category</p>
+                      <p className="mt-2 text-sm text-white">{business.category || 'Not set'}</p>
+                    </div>
+                    <div className="rounded-xl border border-[#252A3A] bg-[#141720] p-3">
+                      <p className="text-xs uppercase tracking-wide text-slate-500">Target audience</p>
+                      <p className="mt-2 text-sm text-white">{business.targetAudience || 'Needs review'}</p>
+                    </div>
+                  </div>
+
+                  {warnings.length > 0 ? (
+                    <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-200">
+                      <div className="flex items-center gap-2 font-medium">
+                        <AlertCircle className="h-4 w-4" />
+                        Website analysis warnings
+                      </div>
+                      <ul className="mt-2 list-disc space-y-1 pl-5 text-xs">
+                        {warnings.map((warning) => (
+                          <li key={warning}>{warning}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+
+                  <div className="flex flex-wrap gap-3">
+                    <Button
+                      variant="outline"
+                      onClick={() => handleRefresh(business)}
+                      disabled={refreshingId === business.id}
+                      className="border-[#252A3A] bg-transparent text-slate-200 hover:bg-white/5"
+                    >
+                      {refreshingId === business.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Globe className="mr-2 h-4 w-4" />}
+                      Analyze Website
+                    </Button>
+                    <Link to={`/dashboard/businesses/${business.id}`}>
+                      <Button className="bg-blue-600 hover:bg-blue-500">
+                        Open Business
+                        <ArrowRight className="ml-2 h-4 w-4" />
+                      </Button>
+                    </Link>
+                    <Link to={`/dashboard/content?business=${business.id}`}>
+                      <Button variant="outline" className="border-[#252A3A] bg-transparent text-slate-200 hover:bg-white/5">
+                        Generate Content
+                      </Button>
+                    </Link>
+                  </div>
+                </CardContent>
+              </Card>
             );
           })}
         </div>
       )}
-
-      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Are you sure?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This will permanently delete "{appToDelete?.name}" and all associated content. This action cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDelete} className="bg-red-600 hover:bg-red-700">
-              Delete
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </div>
   );
 }
