@@ -23,6 +23,19 @@ const platforms: Array<{ id: Platform; label: string }> = [
   { id: 'pinterest', label: 'Pinterest' },
 ];
 
+const creativeSuiteSections = [
+  'Campaign Plan',
+  'Platform Posts',
+  'Images / Creatives',
+  'Video / Shorts',
+  'YouTube Kit',
+  'TikTok / Reels Kit',
+  'Talking Avatar',
+  'Full Campaign Pack',
+  'Calendar / Schedule Plan',
+  'Learning Insights',
+];
+
 export function ContentStudio({
   initialBusinessId,
   onGenerated,
@@ -46,9 +59,12 @@ export function ContentStudio({
       try {
         const items = await webAppApi.getAll();
         setBusinesses(items);
-        if (!businessId && items.length > 0) {
-          setBusinessId(initialBusinessId && items.some((item) => item.id === initialBusinessId) ? initialBusinessId : items[0].id);
-        }
+        setBusinessId((current) => {
+          if (items.length === 0) return '';
+          if (current && items.some((item) => item.id === current)) return current;
+          if (initialBusinessId && items.some((item) => item.id === initialBusinessId)) return initialBusinessId;
+          return items[0].id;
+        });
       } catch (error) {
         setApiError(error instanceof Error ? error.message : 'Failed to load businesses.');
       } finally {
@@ -56,6 +72,11 @@ export function ContentStudio({
       }
     };
     void loadBusinesses();
+    const handler = () => {
+      void loadBusinesses();
+    };
+    window.addEventListener('amarktai:webapps-changed', handler);
+    return () => window.removeEventListener('amarktai:webapps-changed', handler);
   }, [initialBusinessId]);
 
   const selectedBusiness = useMemo(() => businesses.find((item) => item.id === businessId) ?? null, [businessId, businesses]);
@@ -142,6 +163,20 @@ export function ContentStudio({
 
   return (
     <div className="space-y-6">
+      <Card className="border-[#252A3A] bg-[#0D0F14]">
+        <CardHeader>
+          <CardTitle>Creative Suite</CardTitle>
+          <CardDescription>Production workspace sections with truthful capability state.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {creativeSuiteSections.map((section) => (
+            <div key={section} className="rounded-xl border border-[#252A3A] bg-[#141720] p-3">
+              <p className="text-sm font-medium text-white">{section}</p>
+              <p className="mt-1 text-xs text-slate-400">{section === 'Talking Avatar' ? 'Needs provider' : 'Ready / Limited mode'}</p>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
       <Card className="border-[#252A3A] bg-[#0D0F14]">
         <CardHeader>
           <CardTitle>Generate content</CardTitle>

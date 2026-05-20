@@ -96,6 +96,7 @@ function authHeaders(): Record<string, string> {
 
 function providerBadge(status?: string) {
   if (status === 'test_passed') return 'border border-emerald-500/30 bg-emerald-500/15 text-emerald-300';
+  if (status === 'model_invalid') return 'border border-amber-500/30 bg-amber-500/15 text-amber-300';
   if (status === 'test_failed') return 'border border-red-500/30 bg-red-500/15 text-red-300';
   return 'border border-amber-500/30 bg-amber-500/15 text-amber-300';
 }
@@ -110,18 +111,24 @@ export default function IntegrationsPage() {
   const [testingKey, setTestingKey] = useState<string | null>(null);
   const [providerDebug, setProviderDebug] = useState<Record<string, ProviderDebugResult>>({});
   const [providerTests, setProviderTests] = useState<Record<string, ProviderDebugResult>>({});
+  const [providerResolution, setProviderResolution] = useState<Record<string, { effective_source?: string }> | null>(null);
 
   const load = async () => {
     try {
       setLoading(true);
-      const [keysRes, integrationsRes, readinessRes] = await Promise.all([
+      const [keysRes, integrationsRes, readinessRes, resolutionRes] = await Promise.all([
         fetch('/api/v1/settings/api-keys', { headers: authHeaders() }),
         fetch('/api/v1/integrations/platforms', { headers: authHeaders() }),
         fetch('/api/v1/settings/readiness', { headers: authHeaders() }),
+        fetch('/api/v1/settings/provider-resolution', { headers: authHeaders() }),
       ]);
       if (keysRes.ok) setApiKeys((await keysRes.json()) as APIKeysResponse);
       if (integrationsRes.ok) setIntegrations((await integrationsRes.json()) as PlatformIntegration[]);
       if (readinessRes.ok) setReadiness((await readinessRes.json()) as Record<string, unknown>);
+      if (resolutionRes.ok) {
+        const data = (await resolutionRes.json()) as { providers?: Record<string, { effective_source?: string }> };
+        setProviderResolution(data.providers ?? {});
+      }
     } catch {
       toast.error('Failed to load integrations');
     } finally {
@@ -135,6 +142,7 @@ export default function IntegrationsPage() {
 
   const savedKeys = useMemo(() => new Set(apiKeys.user_keys.filter((item) => item.configured).map((item) => item.key_name)), [apiKeys.user_keys]);
   const providerDetails = (readiness?.provider_details as Record<string, { status?: string; message?: string }> | undefined) ?? {};
+  const providers = providerResolution ?? {};
   const socialReadiness = (readiness?.social_platforms as Record<string, { ui_status?: string; can_post_now?: boolean; missing?: string[] }> | undefined) ?? {};
 
   const saveKey = async (keyName: string) => {
@@ -334,10 +342,15 @@ export default function IntegrationsPage() {
             <div key={provider.key} className="rounded-2xl border border-[#252A3A] bg-[#141720] p-4">
               <div className="flex items-center justify-between gap-3">
                 <p className="font-medium text-white">{provider.label}</p>
-                <Badge className={savedKeys.has(provider.key) ? 'border border-emerald-500/30 bg-emerald-500/15 text-emerald-300' : 'border border-[#252A3A] bg-[#0D0F14] text-slate-300'}>
-                  {savedKeys.has(provider.key) ? 'saved' : 'optional'}
+                <Badge className={savedKeys.has(provider.key) ? 'border border-emerald-500/30 bg-emerald-500/15 text-emerald-300' : 'border border-amber-500/30 bg-amber-500/15 text-amber-300'}>
+                  {provider.key === 'QWEN_API_KEY'
+                    ? (savedKeys.has(provider.key) ? 'fallback available' : 'fallback missing')
+                    : provider.key === 'HUGGINGFACE_TOKEN'
+                      ? (savedKeys.has(provider.key) ? 'token saved' : 'missing token')
+                      : (savedKeys.has(provider.key) ? 'key saved' : 'key missing')}
                 </Badge>
               </div>
+              <p className="mt-2 text-xs text-slate-400">Source: {providers[provider.key]?.effective_source || 'missing'}</p>
               <div className="mt-4 space-y-2">
                 <Label className="text-slate-200">API key</Label>
                 <Input

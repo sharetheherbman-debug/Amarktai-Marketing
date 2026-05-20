@@ -8,12 +8,23 @@ import {
   Loader2,
   RefreshCw,
   Sparkles,
+  Trash2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { contentApi, webAppApi } from '@/lib/api';
 import type { Content, Platform, WebApp } from '@/types';
 
@@ -31,6 +42,7 @@ export default function BusinessDetailPage() {
   const [recentContent, setRecentContent] = useState<Content[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
 
   const load = async () => {
     if (!id) return;
@@ -101,6 +113,22 @@ export default function BusinessDetailPage() {
       toast.error(error instanceof Error ? error.message : 'Generate all failed');
     } finally {
       setBusyAction(null);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!business) return;
+    setBusyAction('delete');
+    try {
+      await webAppApi.delete(business.id, true);
+      window.dispatchEvent(new CustomEvent('amarktai:webapps-changed'));
+      toast.success('Business removed.');
+      navigate('/dashboard/businesses');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Delete failed');
+    } finally {
+      setBusyAction(null);
+      setDeleteDialogOpen(false);
     }
   };
 
@@ -259,10 +287,44 @@ export default function BusinessDetailPage() {
                   )}
                 </CardContent>
               </Card>
+
+              <Card className="border-red-500/30 bg-[#141720]">
+                <CardHeader>
+                  <CardTitle className="text-base text-red-300">Danger zone</CardTitle>
+                  <CardDescription>Delete business profile and generated drafts.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <Button
+                    variant="outline"
+                    onClick={() => setDeleteDialogOpen(true)}
+                    className="border-red-500/40 bg-red-500/10 text-red-200 hover:bg-red-500/20"
+                  >
+                    <Trash2 className="mr-2 h-4 w-4" />
+                    Delete Business
+                  </Button>
+                </CardContent>
+              </Card>
             </div>
           </div>
         </CardContent>
       </Card>
+      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <AlertDialogContent className="border-[#252A3A] bg-[#0D0F14] text-white">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Business</AlertDialogTitle>
+            <AlertDialogDescription className="text-slate-300">
+              Delete this business and its generated drafts? This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="border-[#252A3A] bg-transparent text-slate-200 hover:bg-white/5">Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDelete} disabled={busyAction === 'delete'} className="bg-red-600 text-white hover:bg-red-500">
+              {busyAction === 'delete' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Delete Business
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

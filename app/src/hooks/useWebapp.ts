@@ -59,6 +59,14 @@ export function useWebapp(): UseWebappReturn {
     load();
   }, [load]);
 
+  useEffect(() => {
+    const handler = () => {
+      void load();
+    };
+    window.addEventListener('amarktai:webapps-changed', handler);
+    return () => window.removeEventListener('amarktai:webapps-changed', handler);
+  }, [load]);
+
   const setActiveWebapp = useCallback((id: string) => {
     setActiveWebappIdState(id);
     localStorage.setItem(STORAGE_KEY, id);

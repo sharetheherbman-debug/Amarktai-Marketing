@@ -42,15 +42,20 @@ finish() {
   if ((${#BLOCKERS[@]} > 0)); then
     verdict="NO_GO"
     exit_code=1
-  elif ((${#CONDITIONS[@]} > 0)); then
-    verdict="CONDITIONAL_GO_SUPERVISED"
+  elif [[ "${FULL_AUTONOMY_READY_FLAG:-0}" == "1" ]]; then
+    verdict="FULL_AUTONOMY_READY"
+    exit_code=0
+  elif [[ "${MULTIMODAL_LIMITED_FLAG:-0}" == "1" ]]; then
+    verdict="FULL_AUTONOMY_BLOCKED"
     exit_code=0
   else
-    verdict="GO"
+    verdict="MULTIMODAL_LIMITED_OK"
     exit_code=0
   fi
 
   echo
+  [[ "${PRODUCTION_FLOW_FLAG:-0}" == "1" ]] && echo "PRODUCTION_FLOW_OK"
+  [[ "${MULTIMODAL_LIMITED_FLAG:-0}" == "1" ]] && echo "MULTIMODAL_LIMITED_OK"
   echo "Final verdict: $verdict"
   if ((${#BLOCKERS[@]} > 0)); then
     echo "Blockers:"
@@ -80,6 +85,7 @@ run_check "frontend build" bash -lc "cd '$REPO_ROOT/app' && npm run build >/dev/
 
 if BASE_URL="$BASE_URL" FRONTEND_URL="$FRONTEND_URL" REPO_ROOT="$REPO_ROOT" "$REPO_ROOT/scripts/marketing_local_check.sh"; then
   pass "baseline health/login/readiness checks"
+  PRODUCTION_FLOW_FLAG=1
 else
   add_blocker "baseline health/login/readiness checks"
 fi
@@ -133,6 +139,12 @@ for script_name in test_genx_models.sh test_autonomous_generation.sh test_schedu
     add_blocker "$script_name"
   fi
 done
+if BASE_URL="$BASE_URL" MARKETING_TEST_EMAIL="$EMAIL" MARKETING_TEST_PASSWORD="$PASSWORD" "$REPO_ROOT/scripts/test_webapps_live.sh"; then
+  pass "test_webapps_live.sh"
+  MULTIMODAL_LIMITED_FLAG=1
+else
+  add_blocker "test_webapps_live.sh"
+fi
 
 READINESS_JSON=$(curl -fsS "$BASE_URL/api/v1/settings/readiness" "${AUTH_HEADER[@]}") || {
   add_blocker "settings readiness endpoint"
@@ -140,6 +152,26 @@ READINESS_JSON=$(curl -fsS "$BASE_URL/api/v1/settings/readiness" "${AUTH_HEADER[
 }
 PUBLISHING_JSON=$(curl -fsS "$BASE_URL/api/v1/publishing/readiness" "${AUTH_HEADER[@]}") || {
   add_blocker "publishing readiness endpoint"
+  finish
+}
+CAPABILITIES_JSON=$(curl -fsS "$BASE_URL/api/v1/capabilities" "${AUTH_HEADER[@]}") || {
+  add_blocker "capabilities endpoint"
+  finish
+}
+AGENTS_JSON=$(curl -fsS "$BASE_URL/api/v1/agents/status" "${AUTH_HEADER[@]}") || {
+  add_blocker "agents status endpoint"
+  finish
+}
+HF_TASKS_JSON=$(curl -fsS "$BASE_URL/api/v1/settings/huggingface/tasks" "${AUTH_HEADER[@]}") || {
+  add_blocker "huggingface tasks endpoint"
+  finish
+}
+PLATFORM_INTELLIGENCE_JSON=$(curl -fsS "$BASE_URL/api/v1/platform-intelligence" "${AUTH_HEADER[@]}") || {
+  add_blocker "platform intelligence endpoint"
+  finish
+}
+LEARNING_STATUS_JSON=$(curl -fsS "$BASE_URL/api/v1/learning/status" "${AUTH_HEADER[@]}") || {
+  add_blocker "learning status endpoint"
   finish
 }
 
@@ -152,11 +184,19 @@ while IFS='=' read -r key value; do
     BLOCKED_SUPPORTED) BLOCKED_SUPPORTED="$value" ;;
     BLOCKED_ALL) BLOCKED_ALL="$value" ;;
     UNSUPPORTED) UNSUPPORTED="$value" ;;
+    CAPS_OK) CAPS_OK="$value" ;;
+    AGENTS_OK) AGENTS_OK="$value" ;;
+    HF_TASKS_OK) HF_TASKS_OK="$value" ;;
+    LEARNING_OK) LEARNING_OK="$value" ;;
   esac
-done < <(python3 - <<'PY' "$READINESS_JSON" "$PUBLISHING_JSON"
+done < <(python3 - <<'PY' "$READINESS_JSON" "$PUBLISHING_JSON" "$CAPABILITIES_JSON" "$AGENTS_JSON" "$HF_TASKS_JSON" "$LEARNING_STATUS_JSON"
 import json,sys
 readiness=json.loads(sys.argv[1])
 publishing=json.loads(sys.argv[2])
+capabilities=json.loads(sys.argv[3])
+agents=json.loads(sys.argv[4])
+hf_tasks=json.loads(sys.argv[5])
+learning=json.loads(sys.argv[6])
 platforms=publishing.get("platforms") or {}
 ready_supported=[name for name,state in platforms.items() if state.get("posting_supported") and state.get("can_post_now")]
 blocked_supported=[name for name,state in platforms.items() if state.get("posting_supported") and not state.get("can_post_now")]
@@ -170,6 +210,10 @@ print(f"READY_SUPPORTED={','.join(ready_supported)}")
 print(f"BLOCKED_SUPPORTED={','.join(blocked_supported)}")
 print(f"BLOCKED_ALL={','.join(blocked_all)}")
 print(f"UNSUPPORTED={','.join(unsupported)}")
+print(f"CAPS_OK={1 if isinstance(capabilities.get('capabilities'), list) else 0}")
+print(f"AGENTS_OK={1 if isinstance(agents.get('agents'), list) else 0}")
+print(f"HF_TASKS_OK={1 if isinstance(hf_tasks.get('tasks'), list) else 0}")
+print(f"LEARNING_OK={1 if 'learning_active' in learning else 0}")
 PY
 )
 
@@ -191,6 +235,10 @@ if [[ "$REQUIRE_ALL_PLATFORMS_POSTING" == "true" && -n "${BLOCKED_ALL:-}" ]]; th
   add_blocker "REQUIRE_ALL_PLATFORMS_POSTING=true but these platforms cannot post now: ${BLOCKED_ALL}"
 elif [[ -n "${UNSUPPORTED:-}" ]]; then
   warn "Posting not implemented for: ${UNSUPPORTED}"
+fi
+
+if [[ "${GENX_CONFIGURED:-0}" == "1" && "${GENX_MODELS_OK:-0}" == "1" && "${CAPS_OK:-0}" == "1" && "${AGENTS_OK:-0}" == "1" && "${HF_TASKS_OK:-0}" == "1" && "${LEARNING_OK:-0}" == "1" ]]; then
+  FULL_AUTONOMY_READY_FLAG=1
 fi
 
 finish

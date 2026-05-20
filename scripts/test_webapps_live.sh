@@ -65,15 +65,40 @@ CREATE_NAME_BODY="$(request_json "CREATE NAME-ONLY" "POST" "/api/v1/webapps/" '{
 CREATE_URL_BODY="$(request_json "CREATE URL-ONLY" "POST" "/api/v1/webapps/" '{"url":"https://example.com"}')"
 CREATE_BOTH_BODY="$(request_json "CREATE NAME+URL" "POST" "/api/v1/webapps/" '{"name":"Live Name Url Business","url":"https://example.org","is_active":true}')"
 
+NAME_ONLY_ID="$(python3 - <<'PY' "$CREATE_NAME_BODY"
+import json,sys
+print(json.loads(sys.argv[1]).get("id",""))
+PY
+)"
+URL_ONLY_ID="$(python3 - <<'PY' "$CREATE_URL_BODY"
+import json,sys
+print(json.loads(sys.argv[1]).get("id",""))
+PY
+)"
 WEBAPP_ID="$(python3 - <<'PY' "$CREATE_BOTH_BODY"
 import json,sys
 print(json.loads(sys.argv[1]).get("id",""))
 PY
 )"
-if [[ -z "$WEBAPP_ID" ]]; then
+if [[ -z "$WEBAPP_ID" || -z "$NAME_ONLY_ID" || -z "$URL_ONLY_ID" ]]; then
   echo "FAIL: create name+url did not return id" >&2
   exit 1
 fi
 
 request_json "GET BY ID" "GET" "/api/v1/webapps/$WEBAPP_ID" >/dev/null
+
+request_json "DELETE NAME-ONLY" "DELETE" "/api/v1/webapps/$NAME_ONLY_ID?confirm=true" >/dev/null
+request_json "DELETE URL-ONLY" "DELETE" "/api/v1/webapps/$URL_ONLY_ID?confirm=true" >/dev/null
+
+request_json "CLEANUP SMOKE BUSINESSES" "POST" "/api/v1/webapps/cleanup-smoke" >/dev/null
+
+POST_DELETE_LIST="$(request_json "WEBAPPS LIST AFTER DELETE" "GET" "/api/v1/webapps/")"
+python3 - <<'PY' "$POST_DELETE_LIST" "$NAME_ONLY_ID" "$URL_ONLY_ID"
+import json,sys
+items=json.loads(sys.argv[1])
+ids={item.get("id") for item in items if isinstance(item, dict)}
+assert sys.argv[2] not in ids, "name-only business still present after delete"
+assert sys.argv[3] not in ids, "url-only business still present after delete"
+PY
+
 echo "PASS: test_webapps_live completed"
