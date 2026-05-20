@@ -400,9 +400,10 @@ async def list_content_items(
         try:
             payload.append(_content_item_payload(item))
         except Exception as exc:
-            logger.warning("Skipping malformed content row %s: %s", getattr(item, "id", "?"), exc)
+            row_id = getattr(item, "id", "?")
+            logger.warning("Skipping malformed content row %s: %s", row_id, exc)
             payload.append({
-                "id": getattr(item, "id", "unknown"),
+                "id": row_id if isinstance(row_id, str) else "unknown",
                 "platform": getattr(item, "platform", "unknown"),
                 "generation_status": "error",
                 "title": "Malformed content record",
@@ -413,7 +414,7 @@ async def list_content_items(
                 "media_asset_ids": [],
                 "media_urls": [],
                 "degraded": True,
-                "reason": f"Serialization error: {exc}",
+                "reason": "Content record could not be loaded. Contact support if this persists.",
             })
 
     if fmt:
