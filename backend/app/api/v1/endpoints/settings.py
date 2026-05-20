@@ -406,7 +406,7 @@ async def test_api_key(
             "ok": False,
             "status": "test_failed",
             "effective_source": "unknown",
-            "error": _actionable_error_message(exc, "Provider test failed."),
+            "error": "Provider test failed. Check provider configuration and retry.",
         }
 
 
