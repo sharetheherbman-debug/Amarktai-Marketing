@@ -1,112 +1,162 @@
 #!/usr/bin/env bash
+# =============================================================================
+# scripts/test_generated_content_visibility.sh
+#
+# Gate: Generated content persists and is visible in content library and
+#       webapp content listing; deletion removes it.
+# =============================================================================
+
 set -euo pipefail
 
-BASE_URL="${BASE_URL:-http://127.0.0.1:8010}"
-EMAIL="${MARKETING_TEST_EMAIL:-amarktainetwork@gmail.com}"
-PASSWORD="${MARKETING_TEST_PASSWORD:-ChangeMeNow2026!}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+export REPO_ROOT
 
-print_response() {
-  local label="$1"
-  local response="$2"
-  local body status
-  status="$(printf '%s' "$response" | tail -n1)"
-  body="$(printf '%s' "$response" | sed '$d')"
-  echo "=== $label ==="
-  echo "STATUS: $status"
-  echo "BODY: $body"
-  if [[ "$status" -ge 500 ]]; then
-    echo "FAIL: $label returned $status" >&2
-    exit 1
-  fi
-}
+source "$SCRIPT_DIR/lib/auth.sh"
+source "$SCRIPT_DIR/lib/http.sh"
 
-request_json() {
-  local label="$1"
-  local method="$2"
-  local path="$3"
-  local payload="${4:-}"
-  local auth_header=()
-  if [[ -n "${TOKEN:-}" ]]; then
-    auth_header=(-H "Authorization: Bearer $TOKEN")
-  fi
+echo ""
+echo "=================================================="
+echo "  Generated Content Visibility Gate"
+echo "  BASE_URL: ${BASE_URL}"
+echo "=================================================="
 
-  local response
-  if [[ -n "$payload" ]]; then
-    response="$(curl -sS -X "$method" "$BASE_URL$path" "${auth_header[@]}" -H 'Content-Type: application/json' -d "$payload" -w '\n%{http_code}' || true)"
-  else
-    response="$(curl -sS -X "$method" "$BASE_URL$path" "${auth_header[@]}" -H 'Content-Type: application/json' -w '\n%{http_code}' || true)"
-  fi
-  print_response "$label" "$response"
-  printf '%s' "$response" | sed '$d'
-}
-
-LOGIN_BODY="$(request_json "LOGIN" "POST" "/api/v1/auth/login" "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}")"
-TOKEN="$(python3 - <<'PY' "$LOGIN_BODY"
-import json,sys
-print(json.loads(sys.argv[1]).get("access_token",""))
-PY
-)"
-if [[ -z "$TOKEN" ]]; then
-  echo "FAIL: login did not return token" >&2
+# Login
+echo ""
+echo "1. Login..."
+if ! do_login; then
+  echo "NO_GO — login failed"
   exit 1
 fi
+echo "   Token: ${TOKEN:0:20}..."
 
-CREATE_BODY="$(request_json "CREATE BUSINESS" "POST" "/api/v1/webapps/" '{"name":"Visibility Gate Business","url":"https://example.com"}')"
-WEBAPP_ID="$(python3 - <<'PY' "$CREATE_BODY"
-import json,sys
-print(json.loads(sys.argv[1]).get("id",""))
-PY
-)"
+# Create business
+echo ""
+echo "2. Create business..."
+api_call "POST" "/api/v1/webapps/" '{"name":"Visibility Gate Business","url":"https://example.com"}'
+if [[ "$_HTTP_STATUS" != 2* ]] || [[ -z "$_HTTP_BODY" ]]; then
+  print_fail "create business" "$_HTTP_STATUS" "$_HTTP_BODY"
+  echo "FAIL"; exit 1
+fi
+WEBAPP_ID="$(_safe_json_field "$_HTTP_BODY" "id")"
 if [[ -z "$WEBAPP_ID" ]]; then
-  echo "FAIL: business id missing" >&2
-  exit 1
+  echo "FAIL: business id missing"; exit 1
 fi
+echo "   Webapp ID: $WEBAPP_ID"
 
-GENERATE_BODY="$(request_json "GENERATE CONTENT" "POST" "/api/v1/content/generate?webapp_id=$WEBAPP_ID&platform=instagram")"
-CONTENT_ID="$(python3 - <<'PY' "$GENERATE_BODY"
-import json,sys
-print(json.loads(sys.argv[1]).get("id",""))
-PY
-)"
+# Generate content
+echo ""
+echo "3. Generate content..."
+api_call "POST" "/api/v1/content/generate?webapp_id=${WEBAPP_ID}&platform=instagram"
+if [[ "$_HTTP_STATUS" != 2* ]] || [[ -z "$_HTTP_BODY" ]]; then
+  print_fail "generate content" "$_HTTP_STATUS" "$_HTTP_BODY"
+  echo "FAIL"; exit 1
+fi
+CONTENT_ID="$(_safe_json_field "$_HTTP_BODY" "id")"
 if [[ -z "$CONTENT_ID" ]]; then
-  echo "FAIL: generate content did not return id" >&2
-  exit 1
+  echo "FAIL: generate content did not return id"; exit 1
+fi
+echo "   Content ID: $CONTENT_ID"
+
+# Get single item
+echo ""
+echo "4. Get content item by id..."
+assert_json_2xx "GET" "/api/v1/content/items/${CONTENT_ID}" "" "get content item" || { echo "FAIL"; exit 1; }
+
+# Verify appears in webapp content listing
+echo ""
+echo "5. Verify in webapp content listing..."
+api_call "GET" "/api/v1/content/webapp/${WEBAPP_ID}"
+if [[ "$_HTTP_STATUS" != 2* ]] || [[ -z "$_HTTP_BODY" ]]; then
+  print_fail "get content for webapp" "$_HTTP_STATUS" "$_HTTP_BODY"
+  echo "FAIL"; exit 1
+fi
+if ! echo "$_HTTP_BODY" | python3 -c "
+import json, sys
+items = json.load(sys.stdin)
+ids = {item.get('id') for item in items if isinstance(item, dict)}
+import sys as _sys
+cid = _sys.argv[1] if len(_sys.argv) > 1 else ''
+assert cid in ids, f'generated content {cid} missing from webapp listing'
+print('  PASS content visible in webapp listing')
+" "$CONTENT_ID" 2>/dev/null; then
+  echo "  FAIL generated content missing from webapp listing"
+  echo "FAIL"; exit 1
 fi
 
-request_json "GET CONTENT ITEM" "GET" "/api/v1/content/items/$CONTENT_ID" >/dev/null
+# Generate pack
+echo ""
+echo "6. Generate pack..."
+api_call "POST" "/api/v1/content/generate-pack" \
+  "{\"webapp_id\":\"${WEBAPP_ID}\",\"platforms\":[\"instagram\"],\"auto_select_formats\":true}"
+if [[ "$_HTTP_STATUS" != 2* ]] || [[ -z "$_HTTP_BODY" ]]; then
+  print_fail "generate-pack" "$_HTTP_STATUS" "$_HTTP_BODY"
+  echo "FAIL"; exit 1
+fi
+if ! python3 -c "
+import json, sys
+data = json.loads(sys.argv[1])
+assert data.get('count', 0) >= 1, f'pack generation returned no items'
+print('  PASS pack generated')
+" "$_HTTP_BODY" 2>/dev/null; then
+  echo "  FAIL pack assertion failed"
+  echo "FAIL"; exit 1
+fi
 
-WEBAPP_CONTENT_BODY="$(request_json "GET CONTENT FOR BUSINESS" "GET" "/api/v1/content/webapp/$WEBAPP_ID")"
-python3 - <<'PY' "$WEBAPP_CONTENT_BODY" "$CONTENT_ID"
-import json,sys
-items=json.loads(sys.argv[1])
-ids={item.get("id") for item in items if isinstance(item, dict)}
-assert sys.argv[2] in ids, "generated content missing from webapp listing"
-PY
+# Library has 2+ items
+echo ""
+echo "7. Check content library has generated+pack items..."
+api_call "GET" "/api/v1/content/items?webapp_id=${WEBAPP_ID}"
+if [[ "$_HTTP_STATUS" != 2* ]] || [[ -z "$_HTTP_BODY" ]]; then
+  print_fail "content library" "$_HTTP_STATUS" "$_HTTP_BODY"
+  echo "FAIL"; exit 1
+fi
+if ! python3 -c "
+import json, sys
+items = json.loads(sys.argv[1])
+assert isinstance(items, list), 'library did not return list'
+assert len(items) >= 2, f'expected generated+pack items, got {len(items)}'
+print(f'  PASS library has {len(items)} items')
+" "$_HTTP_BODY" 2>/dev/null; then
+  echo "  FAIL library count assertion failed"
+  echo "FAIL"; exit 1
+fi
 
-PACK_BODY="$(request_json "GENERATE PACK" "POST" "/api/v1/content/generate-pack" "{\"webapp_id\":\"$WEBAPP_ID\",\"platforms\":[\"instagram\"],\"auto_select_formats\":true}")"
-python3 - <<'PY' "$PACK_BODY"
-import json,sys
-data=json.loads(sys.argv[1])
-assert data.get("count",0) >= 1, "pack generation returned no items"
-PY
+# Delete content item
+echo ""
+echo "8. Delete content item..."
+api_call "DELETE" "/api/v1/content/items/${CONTENT_ID}?confirm=true"
+if [[ "$_HTTP_STATUS" -ge 500 ]]; then
+  print_fail "delete content item" "$_HTTP_STATUS" "$_HTTP_BODY"
+  echo "FAIL"; exit 1
+fi
+echo "   HTTP ${_HTTP_STATUS}"
 
-LIBRARY_BODY="$(request_json "GET CONTENT LIBRARY" "GET" "/api/v1/content/items?webapp_id=$WEBAPP_ID")"
-python3 - <<'PY' "$LIBRARY_BODY"
-import json,sys
-items=json.loads(sys.argv[1])
-assert isinstance(items, list), "library did not return list"
-assert len(items) >= 2, "expected generated + pack items in library"
-PY
+# Verify deleted
+echo ""
+echo "9. Verify content deleted from webapp listing..."
+api_call "GET" "/api/v1/content/webapp/${WEBAPP_ID}"
+if [[ "$_HTTP_STATUS" != 2* ]] || [[ -z "$_HTTP_BODY" ]]; then
+  print_fail "verify delete" "$_HTTP_STATUS" "$_HTTP_BODY"
+  echo "FAIL"; exit 1
+fi
+if ! python3 -c "
+import json, sys
+items = json.loads(sys.argv[1])
+ids = {item.get('id') for item in items if isinstance(item, dict)}
+cid = sys.argv[2] if len(sys.argv) > 2 else ''
+assert cid not in ids, 'deleted content still present'
+print('  PASS deleted content absent')
+" "$_HTTP_BODY" "$CONTENT_ID" 2>/dev/null; then
+  echo "  FAIL deleted content still present"
+  echo "FAIL"; exit 1
+fi
 
-request_json "DELETE CONTENT ITEM" "DELETE" "/api/v1/content/items/$CONTENT_ID?confirm=true" >/dev/null
+# Cleanup
+echo ""
+echo "10. Cleanup business..."
+api_call "DELETE" "/api/v1/webapps/${WEBAPP_ID}?confirm=true"
+echo "   HTTP ${_HTTP_STATUS}"
 
-POST_DELETE_BODY="$(request_json "VERIFY DELETE" "GET" "/api/v1/content/webapp/$WEBAPP_ID")"
-python3 - <<'PY' "$POST_DELETE_BODY" "$CONTENT_ID"
-import json,sys
-items=json.loads(sys.argv[1])
-ids={item.get("id") for item in items if isinstance(item, dict)}
-assert sys.argv[2] not in ids, "deleted content still present"
-PY
-
-request_json "DELETE BUSINESS" "DELETE" "/api/v1/webapps/$WEBAPP_ID?confirm=true" >/dev/null
+echo ""
 echo "PASS: generated content visibility gate completed"

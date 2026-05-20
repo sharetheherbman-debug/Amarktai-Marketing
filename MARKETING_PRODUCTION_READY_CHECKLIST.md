@@ -34,7 +34,50 @@
 - [x] Schema repair script updated for new runtime tables
 - [x] Production flow gate script covers workers, agents, all platform tests
 
-## Still limited
+## Hotfix — Recovery Gates (PR: hotfix-production-recovery)
+
+### Phase 1 — Offer/product_focus patch (persisted)
+- [x] `app/src/lib/api.ts`: `contentApi.generate` accepts `offer?`
+- [x] `app/src/lib/api.ts`: `contentApi.generateCreative` accepts `offer?`, `productFocus?`
+- [x] `app/src/lib/api.ts`: `contentApi.generatePack` accepts `offer?`, `productFocus?`
+- [x] `app/src/lib/api.ts`: `contentApi.improveItem` accepts `offer?`, `productFocus?`
+- [x] Backend `GenerateCreativeRequest` and `GeneratePackRequest` accept `offer`, `product_focus`
+- [x] Backend `ImproveContentRequest` accepts `offer`, `product_focus`
+- [x] Backend `/content/generate` query accepts `offer` param
+- [x] Frontend build: `npm run build` passes ✓
+- [x] Backend compile: `python3 -m compileall backend` passes ✓
+
+### Phase 2–3 — Shared helpers
+- [x] `scripts/lib/auth.sh`: email-only login, TOKEN export, no random register
+- [x] `scripts/lib/http.sh`: `api_call`, `assert_json_2xx`, `print_fail` — no JSONDecodeError
+
+### Phase 4 — Core endpoint smoke
+- [x] `scripts/test_core_endpoint_smoke.sh`: 11 endpoints checked, PASS/FAIL/NO_GO
+
+### Phase 5 — Repaired gate scripts
+- [x] `scripts/test_login_after_content_rejection.sh` — uses lib helpers, email login
+- [x] `scripts/test_generated_content_visibility.sh` — uses lib helpers, email login
+- [x] `scripts/test_12_platform_pack.sh` — uses lib helpers, email login
+- [x] `scripts/test_scheduler_calendar_flow.sh` — uses lib helpers, email login
+- [x] `scripts/test_provider_router_flow.sh` — uses lib helpers, email login
+- [x] `scripts/test_business_grounding_quality.sh` — uses lib helpers, email login
+- [x] `scripts/test_final_production_flow.sh` — REPO_ROOT resolved, uses lib helpers
+
+### Phase 6 — Provider key diagnostics
+- [x] `GET /api/v1/settings/provider-resolution`: now returns `key_name`, `decrypt_ok`, `configured`, `last_test_status`, `last_test_error`
+- [x] `GET /api/v1/settings/providers/debug`: new endpoint with per-provider truth
+
+### Phase 7 — Provider smoke
+- [x] `scripts/test_provider_key_truth.sh`: resolution, debug, genx/qwen/hf endpoints
+
+### Auth contract
+- Login endpoint: `POST /api/v1/auth/login`
+- Payload: `{"email": "...", "password": "..."}`
+- Response: `{"access_token": "..."}`
+- **Never use username login** — returns 422
+- Random user registration disabled by default in all gate scripts
+
+
 - [ ] Full autonomous publisher worker is configured and verified live
 - [ ] Drag/drop scheduler UX
 - [ ] End-to-end verified live execution of every advanced multimodal provider path
