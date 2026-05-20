@@ -14,6 +14,10 @@ PLATFORM_FORMATS: dict[str, list[str]] = {
     "twitter": ["short_post", "thread", "engagement_question"],
     "reddit": ["discussion_post", "human_review_warning"],
     "pinterest": ["pin_title", "description", "image_prompt", "keyword_copy"],
+    "threads": ["short_post", "conversation_prompt", "image_prompt"],
+    "bluesky": ["short_post", "thread", "image_prompt"],
+    "telegram": ["channel_update", "cta", "voiceover_script", "image_prompt"],
+    "snapchat": ["short_video_brief", "image_prompt", "caption", "voiceover_script"],
 }
 
 

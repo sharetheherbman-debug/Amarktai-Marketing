@@ -18,7 +18,7 @@ from app.models.user_api_key import UserAPIKey, UserIntegration
 from app.models.user import User
 from app.core.config import settings
 from app.services.provider_catalog import USER_PROVIDER_KEY_NAMES
-from app.services.platform_catalog import launch_platforms
+from app.services.platform_catalog import platform_catalog, platform_label
 from app.services.posting_readiness import platform_posting_state
 
 logger = logging.getLogger(__name__)
@@ -141,27 +141,16 @@ async def delete_api_key(
     return {"message": "API key deleted successfully"}
 
 # Platform Integrations Endpoints
-_PLATFORM_LABELS = {
-    "instagram": "Instagram",
-    "facebook": "Facebook",
-    "linkedin": "LinkedIn",
-    "twitter": "X / Twitter",
-    "tiktok": "TikTok",
-    "youtube": "YouTube",
-    "reddit": "Reddit",
-    "pinterest": "Pinterest",
-}
-
-
 @router.get("/platforms", response_model=List[IntegrationStatus])
 async def get_integrations(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """Get launch platform readiness with safe, non-failing output."""
-    platforms = launch_platforms()
+    platforms = platform_catalog()
     result: list[dict[str, Any]] = []
-    for platform in platforms:
+    for platform_meta in platforms:
+        platform = platform_meta["id"]
         try:
             state = platform_posting_state(db, current_user.id, platform)
         except Exception as exc:
@@ -176,21 +165,21 @@ async def get_integrations(
                 "missing": ["oauth_config"],
             }
 
-        oauth_supported = True
-        oauth_configured = bool(state.get("oauth_configured", False))
+        oauth_supported = bool(platform_meta.get("oauth_supported", True))
+        oauth_configured = bool(state.get("oauth_configured", platform_meta.get("oauth_configured", False)))
         posting_supported = bool(state.get("posting_supported", False))
         can_post_now = bool(state.get("can_post_now", False))
         missing = list(state.get("missing", [])) if isinstance(state.get("missing", []), list) else []
 
-        if not oauth_configured:
-            status_label = "OAuth app not configured"
-            user_message = "Content generation is available. Configure the OAuth app before connecting for posting."
-        elif not posting_supported:
-            status_label = "Generation only"
-            user_message = "Posting is not implemented yet for this platform."
-        elif can_post_now:
+        if can_post_now:
             status_label = "Ready to post"
             user_message = "OAuth and posting requirements are configured."
+        elif not oauth_configured:
+            status_label = "OAuth not configured"
+            user_message = str(platform_meta.get("user_message", "Content generation is available."))
+        elif not posting_supported:
+            status_label = "Generation only"
+            user_message = str(platform_meta.get("user_message", "Content generation is available."))
         elif not bool(state.get("user_connected", False)):
             status_label = "Posting not configured"
             user_message = "Content generation is available. Connect OAuth to enable posting."
@@ -200,7 +189,7 @@ async def get_integrations(
 
         result.append({
             "id": platform,
-            "label": _PLATFORM_LABELS.get(platform, platform.title()),
+            "label": platform_label(platform),
             "content_generation_available": True,
             "oauth_supported": oauth_supported,
             "oauth_configured": oauth_configured,

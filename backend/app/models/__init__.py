@@ -9,6 +9,14 @@ from app.models.lead import Lead
 from app.models.business_group import BusinessGroup
 from app.models.contact import ContactMessage
 from app.models.notification import Notification
+from app.models.marketing_runtime import (
+    SchedulerItem,
+    MediaJob,
+    MediaAsset,
+    LearningRun,
+    LearningInsight,
+    BusinessPlatformPreference,
+)
 from app.models.tools import (
     ContentRemix, CompetitorProfile, FeedbackAnalysis,
     EchoAmplification, SeoMirageReport, ChurnShieldReport,
@@ -23,6 +31,7 @@ __all__ = [
     "BusinessGroup",
     "ContactMessage",
     "Notification",
+    "SchedulerItem", "MediaJob", "MediaAsset", "LearningRun", "LearningInsight", "BusinessPlatformPreference",
     "ContentRemix", "CompetitorProfile", "FeedbackAnalysis",
     "EchoAmplification", "SeoMirageReport", "ChurnShieldReport",
     "HarmonyPricerReport", "ViralSparkReport", "AudienceMapReport", "AdAlchemyReport",

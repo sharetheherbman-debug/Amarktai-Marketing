@@ -71,7 +71,7 @@ export interface PlatformConnection {
   postingSchedule?: Record<string, unknown>;
 }
 
-export type ContentStatus = 'pending' | 'approved' | 'rejected' | 'posted' | 'failed';
+export type ContentStatus = 'pending' | 'approved' | 'rejected' | 'posted' | 'failed' | 'scheduled';
 export type ContentType = 'video' | 'image' | 'carousel' | 'text';
 
 export interface Content {

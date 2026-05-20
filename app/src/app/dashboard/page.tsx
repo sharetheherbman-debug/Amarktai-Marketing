@@ -22,6 +22,15 @@ import { useWebapp } from '@/hooks/useWebapp';
 import { contentApi, settingsApi, webAppApi } from '@/lib/api';
 import type { Content, ContentLibraryItem } from '@/types';
 
+interface UpcomingSchedulerItem {
+  id: string;
+  business_id: string;
+  platform_label: string;
+  title: string;
+  planned_at: string | null;
+  status: string;
+}
+
 const steps = [
   { title: 'Add Business', description: 'Start with a business name, website URL, or both.', href: '/dashboard/businesses/new' },
   { title: 'Analyze Website', description: 'Scrape the website when available and enrich the profile.', href: '/dashboard/businesses' },
@@ -52,6 +61,7 @@ export default function DashboardPage() {
   const [readiness, setReadiness] = useState<Record<string, unknown> | null>(null);
   const [recentContent, setRecentContent] = useState<Content[]>([]);
   const [recentItems, setRecentItems] = useState<ContentLibraryItem[]>([]);
+  const [upcomingItems, setUpcomingItems] = useState<UpcomingSchedulerItem[]>([]);
   const [busyAction, setBusyAction] = useState<'analyze' | 'generate-all' | null>(null);
 
   const greetingName = user?.name?.split(' ')[0] ?? 'there';
@@ -78,6 +88,22 @@ export default function DashboardPage() {
         setRecentItems(libraryItems.slice(0, 12));
       } catch {
         setRecentItems([]);
+      }
+
+      try {
+        const upcomingRes = await fetch('/api/v1/scheduler/upcoming', {
+          headers: (() => {
+            const token = localStorage.getItem('amarktai_token');
+            const headers: Record<string, string> = {};
+            if (token) headers.Authorization = `Bearer ${token}`;
+            return headers;
+          })(),
+        });
+        if (!upcomingRes.ok) throw new Error();
+        const upcoming = await upcomingRes.json() as { items?: UpcomingSchedulerItem[] };
+        setUpcomingItems(Array.isArray(upcoming.items) ? upcoming.items : []);
+      } catch {
+        setUpcomingItems([]);
       }
     };
     void load();
@@ -260,8 +286,9 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       ) : (
-        <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
-          <Card className="border-[#252A3A] bg-[#0D0F14]">
+        <>
+          <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
+            <Card className="border-[#252A3A] bg-[#0D0F14]">
             <CardHeader>
               <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                 <div>
@@ -314,7 +341,7 @@ export default function DashboardPage() {
                   </Button>
                   <Button
                     variant="outline"
-                    onClick={() => navigate('/dashboard/scheduler')}
+                    onClick={() => navigate(`/dashboard/scheduler${activeWebapp?.id ? `?business=${activeWebapp.id}` : ''}`)}
                     className="border-[#252A3A] bg-transparent text-slate-200 hover:bg-white/5"
                   >
                     <Calendar className="mr-2 h-4 w-4" />
@@ -376,8 +403,38 @@ export default function DashboardPage() {
                 })
               )}
             </CardContent>
+            </Card>
+          </div>
+
+          <Card className="border-[#252A3A] bg-[#0D0F14]">
+            <CardHeader>
+              <CardTitle>Upcoming scheduled content</CardTitle>
+              <CardDescription>Real scheduler items coming next.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {upcomingItems.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-[#252A3A] bg-[#141720] p-4 text-sm text-slate-400">
+                  Nothing scheduled yet. Generate content, then move it into the scheduler.
+                </div>
+              ) : (
+                upcomingItems
+                  .filter((item) => !activeWebapp || item.business_id === activeWebapp.id)
+                  .slice(0, 6)
+                  .map((item) => (
+                    <div key={item.id} className="rounded-2xl border border-[#252A3A] bg-[#141720] p-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold text-white">{item.title}</p>
+                          <p className="text-xs text-slate-400">{item.platform_label} · {item.planned_at || 'Unscheduled'}</p>
+                        </div>
+                        <Badge className="border border-[#252A3A] bg-[#0D0F14] text-slate-200">{item.status}</Badge>
+                      </div>
+                    </div>
+                  ))
+              )}
+            </CardContent>
           </Card>
-        </div>
+        </>
       )}
     </div>
   );
