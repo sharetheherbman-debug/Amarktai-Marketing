@@ -32,16 +32,16 @@ const steps = [
 function readinessTone(readiness: Record<string, unknown> | null) {
   if ((readiness?.full_go_live_ready as boolean | undefined) === true) {
     return {
-      label: 'Full readiness',
+      label: 'Generation ready',
       badge: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
       description: 'Providers are passing and posting setup can move toward full go-live.',
     };
   }
 
   return {
-    label: 'Degraded beta readiness',
+    label: 'Limited mode',
     badge: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
-    description: 'Fallback generation is available. Add GenX and Firecrawl in Integrations for higher quality.',
+    description: 'Provider degraded. Content generation is available with fallbacks.',
   };
 }
 
@@ -127,7 +127,7 @@ export default function DashboardPage() {
         <div>
           <h1 className="text-2xl font-bold text-white sm:text-3xl">Good evening, {greetingName}</h1>
           <p className="mt-2 max-w-2xl text-sm text-slate-400">
-            This dashboard is the command center for tonight&apos;s beta flow: add a business, analyze it, generate content, then review and schedule it.
+            This dashboard is your command center: add a business, analyze it, generate content, then review and schedule it.
           </p>
         </div>
         <Card className="border-[#252A3A] bg-[#0D0F14] lg:w-[360px]">
@@ -187,7 +187,7 @@ export default function DashboardPage() {
             ))}
             {noProviders ? (
               <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 p-3 text-xs text-amber-200">
-                For higher quality, add GenX and Firecrawl in Integrations. Beta generation still works with fallback templates.
+                Full automation not configured. Add GenX and Firecrawl in Integrations for higher quality generation.
               </div>
             ) : null}
           </CardContent>

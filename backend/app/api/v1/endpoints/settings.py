@@ -66,6 +66,11 @@ def _safe_preview(value: str | None, limit: int = 300) -> str:
     return str(value).replace("\n", " ").strip()[:limit]
 
 
+def _actionable_error_message(error: Any, fallback: str) -> str:
+    text = _safe_preview(str(error or ""))
+    return text or fallback
+
+
 def _extract_genx_text(data: dict[str, Any]) -> str:
     if not isinstance(data, dict):
         return ""
@@ -341,47 +346,68 @@ async def test_api_key(
 ) -> dict[str, Any]:
     if payload.key_name not in USER_PROVIDER_KEY_NAMES:
         raise HTTPException(status_code=400, detail="Unsupported provider key.")
+    try:
+        resolved_key, source = _resolve_provider_key(
+            db,
+            current_user.id,
+            payload.key_name,
+            getattr(settings, payload.key_name, "") or "",
+        )
+        key_value = (payload.key_value or "").strip() or resolved_key
 
-    key_value = (payload.key_value or "").strip() or resolve_user_api_key(
-        db,
-        current_user.id,
-        payload.key_name,
-        getattr(settings, payload.key_name, "") or "",
-    )
+        if not key_value:
+            return {
+                "key_name": payload.key_name,
+                "ok": False,
+                "status": "missing",
+                "effective_source": "missing",
+                "error": "Provider key is missing.",
+            }
 
-    if not key_value:
-        return {"key_name": payload.key_name, "ok": False, "status": "missing", "error": "Provider key is missing."}
+        if payload.key_name == "GENX_API_KEY":
+            result = await _run_genx_test(key_value)
+            ok = bool(result.get("ok"))
+            return {
+                "key_name": payload.key_name,
+                "ok": ok,
+                "status": _test_state(True, ok=ok),
+                "effective_source": source if not payload.key_value else "provided",
+                "error": None if ok else _actionable_error_message(result.get("error"), "GenX provider test failed."),
+                "latency_ms": result.get("latency_ms", 0),
+                "model": result.get("model"),
+                "base_url": result.get("base_url"),
+            }
 
-    if payload.key_name == "GENX_API_KEY":
-        result = await _run_genx_test(key_value)
+        if payload.key_name == "FIRECRAWL_API_KEY":
+            result = await test_firecrawl_key(key_value)
+            ok = bool(result.get("ok"))
+            recorded = _record_firecrawl_test(current_user.id, ok=ok, error=str(result.get("error") or ""))
+            return {
+                "key_name": payload.key_name,
+                "ok": ok,
+                "status": _test_state(True, ok=ok),
+                "effective_source": source if not payload.key_value else "provided",
+                "error": None if ok else _actionable_error_message(result.get("error"), "Firecrawl provider test failed."),
+                "checked_at": recorded["checked_at"],
+            }
+
         return {
             "key_name": payload.key_name,
-            "ok": result["ok"],
-            "status": _test_state(True, ok=result["ok"]),
-            "error": result["error"],
-            "latency_ms": result["latency_ms"],
-            "model": result["model"],
-            "base_url": result["base_url"],
+            "ok": True,
+            "status": "configured",
+            "effective_source": source if not payload.key_value else "provided",
+            "error": None,
+            "message": "Stored successfully. Live smoke test is not implemented for this optional fallback provider.",
         }
-
-    if payload.key_name == "FIRECRAWL_API_KEY":
-        result = await test_firecrawl_key(key_value)
-        recorded = _record_firecrawl_test(current_user.id, ok=bool(result["ok"]), error=str(result.get("error") or ""))
+    except Exception as exc:
+        logger.warning("Provider test failed for user %s key %s: %s", current_user.id, payload.key_name, type(exc).__name__)
         return {
             "key_name": payload.key_name,
-            "ok": bool(result["ok"]),
-            "status": _test_state(True, ok=bool(result["ok"])),
-            "error": result.get("error"),
-            "checked_at": recorded["checked_at"],
+            "ok": False,
+            "status": "test_failed",
+            "effective_source": "unknown",
+            "error": _actionable_error_message(exc, "Provider test failed."),
         }
-
-    return {
-        "key_name": payload.key_name,
-        "ok": True,
-        "status": "configured",
-        "error": None,
-        "message": "Stored successfully. Live smoke test is not implemented for this optional fallback provider.",
-    }
 
 
 @router.get("/billing")
@@ -693,15 +719,16 @@ async def genx_debug_test(
     model = settings.GENX_DEFAULT_MODEL
     if not api_key:
         return {
+            "ok": False,
+            "status": "missing",
+            "effective_source": source,
             "http_status": 0,
             "base_url": base_url,
             "model": model,
             "response_shape_keys": [],
             "parsed_text_present": False,
-            "parsed_content_present": False,
             "sanitized_preview": "",
-            "error": "GENX_API_KEY is missing.",
-            "effective_source": source,
+            "error": "GENX key is missing.",
         }
     endpoint = f"{base_url.rstrip('/')}/chat/completions"
     payload = {
@@ -721,28 +748,38 @@ async def genx_debug_test(
         parsed = _extract_genx_text(raw if isinstance(raw, dict) else {})
         preview = _safe_preview(parsed or str(raw)[:300])
         return {
+            "ok": response.status_code < 400 and bool(parsed),
+            "status": "ok" if response.status_code < 400 and bool(parsed) else ("provider_error" if response.status_code >= 400 else "parse_failed"),
+            "effective_source": source,
             "http_status": response.status_code,
             "base_url": base_url,
             "model": model,
             "response_shape_keys": sorted(list(raw.keys())) if isinstance(raw, dict) else [],
             "parsed_text_present": bool(parsed),
-            "parsed_content_present": bool(parsed),
             "sanitized_preview": preview,
-            "error": None if response.status_code < 400 and parsed else ("No response text parsed." if response.status_code < 400 else "GenX request failed."),
-            "effective_source": source,
+            "error": (
+                None
+                if response.status_code < 400 and parsed
+                else (
+                    "Provider reached, but no text parsed. Check GENX_DEFAULT_MODEL."
+                    if response.status_code < 400
+                    else f"Provider request failed with HTTP {response.status_code}."
+                )
+            ),
         }
     except Exception as exc:
         logger.warning("GenX debug test failed for user %s: %s", current_user.id, type(exc).__name__)
         return {
+            "ok": False,
+            "status": "provider_error",
+            "effective_source": source,
             "http_status": 0,
             "base_url": base_url,
             "model": model,
             "response_shape_keys": [],
             "parsed_text_present": False,
-            "parsed_content_present": False,
             "sanitized_preview": "",
-            "error": "GenX request failed.",
-            "effective_source": source,
+            "error": _actionable_error_message(exc, "GenX request failed."),
         }
 
 
@@ -752,22 +789,23 @@ async def firecrawl_debug_test(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     api_key, source = _resolve_provider_key(db, current_user.id, "FIRECRAWL_API_KEY", settings.FIRECRAWL_API_KEY)
-    base_url = "https://api.firecrawl.dev/v2/scrape"
+    endpoint = "https://api.firecrawl.dev/v2/scrape"
     if not api_key:
         return {
+            "ok": False,
+            "status": "missing",
+            "effective_source": source,
+            "endpoint": endpoint,
             "http_status": 0,
-            "base_url": base_url,
             "response_shape_keys": [],
-            "parsed_text_present": False,
             "parsed_content_present": False,
             "sanitized_preview": "",
-            "error": "FIRECRAWL_API_KEY is missing.",
-            "effective_source": source,
+            "error": "Firecrawl key is missing.",
         }
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.post(
-                base_url,
+                endpoint,
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                 json={"url": "https://example.com", "formats": ["markdown", "html"]},
             )
@@ -785,24 +823,34 @@ async def firecrawl_debug_test(
                 or ""
             )
         return {
+            "ok": response.status_code < 400 and bool(content),
+            "status": "ok" if response.status_code < 400 and bool(content) else ("provider_error" if response.status_code >= 400 else "parse_failed"),
+            "effective_source": source,
+            "endpoint": endpoint,
             "http_status": response.status_code,
-            "base_url": base_url,
             "response_shape_keys": sorted(list(raw.keys())) if isinstance(raw, dict) else [],
-            "parsed_text_present": bool(content),
             "parsed_content_present": bool(content),
             "sanitized_preview": _safe_preview(content),
-            "error": None if response.status_code < 400 else "Firecrawl request failed.",
-            "effective_source": source,
+            "error": (
+                None
+                if response.status_code < 400 and bool(content)
+                else (
+                    "Provider reached, but no content parsed from response."
+                    if response.status_code < 400
+                    else f"Provider request failed with HTTP {response.status_code}."
+                )
+            ),
         }
     except Exception as exc:
         logger.warning("Firecrawl debug test failed for user %s: %s", current_user.id, type(exc).__name__)
         return {
+            "ok": False,
+            "status": "provider_error",
+            "effective_source": source,
+            "endpoint": endpoint,
             "http_status": 0,
-            "base_url": base_url,
             "response_shape_keys": [],
-            "parsed_text_present": False,
             "parsed_content_present": False,
             "sanitized_preview": "",
-            "error": "Firecrawl request failed.",
-            "effective_source": source,
+            "error": _actionable_error_message(exc, "Firecrawl request failed."),
         }

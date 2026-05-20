@@ -234,10 +234,10 @@ export default function SettingsPage() {
           </CardHeader>
           <CardContent>
             <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200">
-              <div className="flex items-center gap-2 font-medium">
-                <AlertTriangle className="h-4 w-4" />
-                Workspace deletion is not available from this beta settings screen.
-              </div>
+                <div className="flex items-center gap-2 font-medium">
+                  <AlertTriangle className="h-4 w-4" />
+                  Workspace deletion is not available from this settings screen.
+                </div>
               <p className="mt-2 text-red-100/80">Use support or admin workflows for destructive actions until the product flow is hardened.</p>
             </div>
           </CardContent>
