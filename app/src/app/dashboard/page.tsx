@@ -58,17 +58,26 @@ export default function DashboardPage() {
 
   useEffect(() => {
     const load = async () => {
+      // Each API call is isolated — one failure must not prevent others from loading.
       try {
-        const [readinessData, content] = await Promise.all([
-          settingsApi.getReadiness(),
-          contentApi.getAll(),
-        ]);
+        const readinessData = await settingsApi.getReadiness();
         setReadiness(readinessData);
+      } catch {
+        setReadiness(null);
+      }
+
+      try {
+        const content = await contentApi.getAll();
         setRecentContent(content.slice(0, 8));
+      } catch {
+        setRecentContent([]);
+      }
+
+      try {
         const libraryItems = await contentApi.listItems();
         setRecentItems(libraryItems.slice(0, 12));
       } catch {
-        setReadiness(null);
+        setRecentItems([]);
       }
     };
     void load();

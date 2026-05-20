@@ -24,22 +24,37 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(getStoredUser);
   const [isLoaded, setIsLoaded] = useState(false);
 
-  // On mount, verify the stored token is still valid by hitting /users/me
+  // On mount, verify the stored token is still valid by hitting /users/me.
+  // IMPORTANT: Only force-logout on genuine auth failures (401).
+  // Server errors (500, network down, etc.) must NOT log out the user —
+  // we keep the stored session and let the user land in the dashboard.
   useEffect(() => {
     const stored = getStoredToken();
     if (!stored) {
       setIsLoaded(true);
       return;
     }
-    authFetch<AuthUser>('/users/me', undefined, stored)
-      .then((u) => {
-        setUser(u);
-        setToken(stored);
+    const tok = stored;
+    fetch('/api/v1/users/me', {
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` },
+    })
+      .then(async (res) => {
+        if (res.ok) {
+          const u = await res.json() as AuthUser;
+          setUser(u);
+          setToken(tok);
+        } else if (res.status === 401 || res.status === 403) {
+          // Genuine auth failure — token is invalid/expired
+          clearSession();
+          setToken(null);
+          setUser(null);
+        }
+        // For any other status (500, 502, 503, etc.): keep existing session.
+        // The stored user data is still valid; server may be temporarily down.
       })
       .catch(() => {
-        clearSession();
-        setToken(null);
-        setUser(null);
+        // Network error — keep existing session so the user is not logged out
+        // during transient outages or server restarts.
       })
       .finally(() => setIsLoaded(true));
   }, []);

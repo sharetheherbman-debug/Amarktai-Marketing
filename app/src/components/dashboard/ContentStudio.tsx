@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertCircle, Calendar, Copy, Loader2, PenTool, Sparkles, Trash2, Wand2 } from 'lucide-react';
+import { AlertCircle, Calendar, Copy, Loader2, PenTool, Sparkles, Trash2, Wand2, XCircle } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Badge } from '@/components/ui/badge';
@@ -54,9 +54,11 @@ export function ContentStudio({
   const [items, setItems] = useState<ContentLibraryItem[]>([]);
   const [filterPlatform, setFilterPlatform] = useState<string>('all');
   const [filterFormat, setFilterFormat] = useState<string>('all');
-  const [filterStatus, setFilterStatus] = useState<string>('all');
+  const [filterStatus, setFilterStatus] = useState<string>('active');
   const [filterProvider, setFilterProvider] = useState<string>('all');
   const [filterDate, setFilterDate] = useState<string>('');
+  const [rejectTarget, setRejectTarget] = useState<string | null>(null);
+  const [rejectReason, setRejectReason] = useState<string>('');
 
   const selectedBusiness = useMemo(() => businesses.find((item) => item.id === businessId) ?? null, [businessId, businesses]);
 
@@ -103,9 +105,16 @@ export function ContentStudio({
 
   const filteredItems = useMemo(() => {
     return items.filter((item) => {
+      // 'active' filter hides rejected/deleted items from default view
+      if (filterStatus === 'active') {
+        const s = (item.status || item.generationStatus || '').toLowerCase();
+        if (s === 'rejected' || s === 'deleted') return false;
+      } else if (filterStatus !== 'all') {
+        const s = (item.status || item.generationStatus || '').toLowerCase();
+        if (s !== filterStatus) return false;
+      }
       if (filterPlatform !== 'all' && item.platform !== filterPlatform) return false;
       if (filterFormat !== 'all' && item.format !== filterFormat) return false;
-      if (filterStatus !== 'all' && item.generationStatus !== filterStatus) return false;
       if (filterProvider !== 'all' && (item.providerActual || 'unknown') !== filterProvider) return false;
       if (filterDate && !item.createdAt.startsWith(filterDate)) return false;
       return true;
@@ -307,8 +316,12 @@ export function ContentStudio({
               {[...new Set(items.map((item) => item.format))].map((value) => <option key={value} value={value}>{value}</option>)}
             </select>
             <select value={filterStatus} onChange={(event) => setFilterStatus(event.target.value)} className="rounded-xl border border-[#252A3A] bg-[#141720] px-3 py-2 text-sm text-white">
+              <option value="active">Active (hide rejected)</option>
               <option value="all">All statuses</option>
-              {[...new Set(items.map((item) => item.generationStatus))].map((value) => <option key={value} value={value}>{value}</option>)}
+              <option value="rejected">Rejected</option>
+              <option value="scheduled">Scheduled</option>
+              <option value="template_fallback">Template fallback</option>
+              {[...new Set(items.map((item) => item.generationStatus))].filter((v) => !['rejected', 'scheduled', 'template_fallback'].includes(v)).map((value) => <option key={value} value={value}>{value}</option>)}
             </select>
             <select value={filterProvider} onChange={(event) => setFilterProvider(event.target.value)} className="rounded-xl border border-[#252A3A] bg-[#141720] px-3 py-2 text-sm text-white">
               <option value="all">All providers</option>
@@ -319,20 +332,26 @@ export function ContentStudio({
 
           {filteredItems.length === 0 ? (
             <div className="rounded-xl border border-dashed border-[#252A3A] bg-[#141720] p-4 text-sm text-slate-400">
-              No generated content yet. Choose a business and generate your first campaign.
+              {filterStatus === 'active'
+                ? 'No active content. Generate your first campaign above, or switch to "All statuses" to see rejected/deleted items.'
+                : 'No content matches your filters.'}
             </div>
           ) : (
             <div className="grid gap-4 xl:grid-cols-2">
               {filteredItems.map((item) => (
-                <Card key={item.id} className="border-[#252A3A] bg-[#141720]">
+                <Card key={item.id} className={`border-[#252A3A] ${item.status === 'rejected' ? 'bg-[#1a1212] opacity-80' : 'bg-[#141720]'}`}>
                   <CardHeader>
                     <div className="flex items-start justify-between gap-2">
                       <div>
                         <CardTitle className="text-base capitalize text-white">{item.platform}</CardTitle>
                         <CardDescription>{item.title || 'Generated draft'}</CardDescription>
                       </div>
-                      <Badge className={item.degraded ? 'border border-amber-500/30 bg-amber-500/15 text-amber-300' : 'border border-emerald-500/30 bg-emerald-500/15 text-emerald-300'}>
-                        {item.generationStatus.replaceAll('_', ' ')}
+                      <Badge className={
+                        item.status === 'rejected' ? 'border border-red-500/30 bg-red-500/15 text-red-300' :
+                        item.degraded ? 'border border-amber-500/30 bg-amber-500/15 text-amber-300' :
+                        'border border-emerald-500/30 bg-emerald-500/15 text-emerald-300'
+                      }>
+                        {(item.status || item.generationStatus).replaceAll('_', ' ')}
                       </Badge>
                     </div>
                   </CardHeader>
@@ -344,28 +363,38 @@ export function ContentStudio({
                       <Badge className="border border-[#252A3A] bg-[#0D0F14] text-slate-200">{item.modelActual || 'model unknown'}</Badge>
                       <Badge className="border border-[#252A3A] bg-[#0D0F14] text-slate-200">fit {item.platformFitScore ?? 'n/a'}</Badge>
                     </div>
-                    <div className="rounded-xl border border-[#252A3A] bg-[#0D0F14] p-3 text-xs text-slate-300">
+                    <div className="rounded-xl border border-[#252A3A] bg-[#0D0F14] p-3 text-xs text-slate-300 space-y-0.5">
+                      <p>Business: {item.businessName || selectedBusiness?.name || 'unknown'}</p>
+                      <p>Source: {item.sourceAction || 'unknown'}</p>
+                      <p>Generated by: {item.generatedBy || item.providerActual || 'template'}</p>
                       <p>Media jobs: {item.mediaJobIds.length}</p>
-                      <p className="mt-1">Assets: {item.mediaAssetIds.length || item.mediaUrls.length}</p>
-                      <p className="mt-1">Asset status: {item.assetGenerationStatus || 'unknown'}</p>
+                      <p>Assets: {item.mediaAssetIds.length || item.mediaUrls.length}</p>
+                      <p>Asset status: {item.assetGenerationStatus || 'unknown'}</p>
+                      {item.rejectionReason ? <p className="text-red-300">Rejection reason: {item.rejectionReason}</p> : null}
                     </div>
                     <div className="flex flex-wrap gap-2">
                       <Button size="sm" variant="outline" onClick={async () => { await navigator.clipboard.writeText(cardBody(item)); toast.success('Copied content.'); }} className="border-[#252A3A] bg-transparent text-slate-200 hover:bg-white/5">
                         <Copy className="mr-1 h-3.5 w-3.5" />
                         Copy
                       </Button>
-                      <Button size="sm" variant="outline" onClick={async () => { await contentApi.improveItem(item.id); await refreshItems(); toast.success('Improved draft created.'); }} className="border-[#252A3A] bg-transparent text-slate-200 hover:bg-white/5">
+                      <Button size="sm" variant="outline" onClick={async () => { try { await contentApi.improveItem(item.id); await refreshItems(); toast.success('Improved draft created.'); } catch { toast.error('Improve failed.'); } }} className="border-[#252A3A] bg-transparent text-slate-200 hover:bg-white/5">
                         <Wand2 className="mr-1 h-3.5 w-3.5" />
                         Improve
                       </Button>
-                      <Button size="sm" variant="outline" onClick={async () => { await contentApi.scheduleItem(item.id); await refreshItems(); toast.success('Item scheduled.'); }} className="border-[#252A3A] bg-transparent text-slate-200 hover:bg-white/5">
+                      <Button size="sm" variant="outline" onClick={async () => { try { await contentApi.scheduleItem(item.id); await refreshItems(); toast.success('Item scheduled.'); } catch { toast.error('Schedule failed.'); } }} className="border-[#252A3A] bg-transparent text-slate-200 hover:bg-white/5">
                         <Calendar className="mr-1 h-3.5 w-3.5" />
                         Schedule
                       </Button>
-                      <Button size="sm" variant="outline" onClick={async () => { await contentApi.duplicateItem(item.id); await refreshItems(); toast.success('Draft duplicated.'); }} className="border-[#252A3A] bg-transparent text-slate-200 hover:bg-white/5">
+                      <Button size="sm" variant="outline" onClick={async () => { try { await contentApi.duplicateItem(item.id); await refreshItems(); toast.success('Draft duplicated.'); } catch { toast.error('Duplicate failed.'); } }} className="border-[#252A3A] bg-transparent text-slate-200 hover:bg-white/5">
                         Duplicate
                       </Button>
-                      <Button size="sm" variant="outline" onClick={async () => { await contentApi.deleteItem(item.id); await refreshItems(); toast.success('Draft deleted.'); }} className="border-red-500/40 bg-red-500/10 text-red-200 hover:bg-red-500/20">
+                      {(item.status !== 'rejected') && (
+                        <Button size="sm" variant="outline" onClick={() => { setRejectTarget(item.id); setRejectReason(''); }} className="border-amber-500/40 bg-amber-500/10 text-amber-200 hover:bg-amber-500/20">
+                          <XCircle className="mr-1 h-3.5 w-3.5" />
+                          Reject
+                        </Button>
+                      )}
+                      <Button size="sm" variant="outline" onClick={async () => { try { await contentApi.deleteItem(item.id); await refreshItems(); toast.success('Draft deleted.'); } catch { toast.error('Delete failed.'); } }} className="border-red-500/40 bg-red-500/10 text-red-200 hover:bg-red-500/20">
                         <Trash2 className="mr-1 h-3.5 w-3.5" />
                         Delete
                       </Button>
@@ -377,6 +406,49 @@ export function ContentStudio({
           )}
         </CardContent>
       </Card>
+
+      {/* Reject confirmation dialog */}
+      {rejectTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
+          <div className="w-full max-w-md rounded-2xl border border-[#252A3A] bg-[#0D0F14] p-6 shadow-2xl space-y-4">
+            <h3 className="text-lg font-semibold text-white">Reject this draft?</h3>
+            <p className="text-sm text-slate-400">
+              It will be kept for learning and hidden from active drafts. You can view it under the "Rejected" filter.
+            </p>
+            <div className="space-y-2">
+              <Label className="text-slate-300">What was wrong? (optional)</Label>
+              <Textarea
+                value={rejectReason}
+                onChange={(e) => setRejectReason(e.target.value)}
+                placeholder="e.g. Wrong hashtags, unrelated imagery, off-brand tone…"
+                className="min-h-[80px] border-[#252A3A] bg-[#141720] text-white text-sm"
+              />
+            </div>
+            <div className="flex gap-3 justify-end">
+              <Button variant="outline" onClick={() => setRejectTarget(null)} className="border-[#252A3A] bg-transparent text-slate-300 hover:bg-white/5">
+                Cancel
+              </Button>
+              <Button
+                className="bg-amber-600 hover:bg-amber-500 text-white"
+                onClick={async () => {
+                  const id = rejectTarget;
+                  setRejectTarget(null);
+                  try {
+                    await contentApi.rejectItem(id, { reason: rejectReason || undefined });
+                    await refreshItems();
+                    toast.success('Draft rejected and kept for learning.');
+                  } catch {
+                    toast.error('Rejection failed. The item was not changed.');
+                  }
+                }}
+              >
+                <XCircle className="mr-2 h-4 w-4" />
+                Confirm Reject
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -97,9 +97,14 @@ export interface ContentLibraryItem {
   id: string;
   userId: string;
   webappId: string;
+  businessName: string;
   campaignId?: string;
+  sourceRoute: string;
+  sourceAction: string;
+  generatedBy: string;
   platform: Platform;
   format: string;
+  status: string;
   title: string;
   caption: string;
   body: string;
@@ -122,10 +127,12 @@ export interface ContentLibraryItem {
   generationStatus: string;
   degraded: boolean;
   reason?: string;
+  rejectionReason?: string;
   assetGenerationStatus?: string;
   mediaJobIds: string[];
   mediaAssetIds: string[];
   mediaUrls: string[];
+  sourceBusinessSnapshot?: Record<string, unknown>;
   createdAt: string;
   updatedAt?: string;
 }

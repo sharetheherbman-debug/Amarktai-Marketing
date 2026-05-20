@@ -146,13 +146,18 @@ function mapContent(raw: Record<string, unknown>): Content {
 function mapContentItem(raw: Record<string, unknown>): ContentLibraryItem {
   const c = toCamel(raw);
   return {
-    id: c.id as string,
-    userId: c.userId as string,
-    webappId: c.webappId as string,
+    id: (c.id as string) ?? 'unknown',
+    userId: (c.userId as string) ?? '',
+    webappId: (c.webappId as string) ?? '',
+    businessName: (c.businessName as string) ?? '',
     campaignId: c.campaignId as string | undefined,
+    sourceRoute: (c.sourceRoute as string) ?? 'unknown',
+    sourceAction: (c.sourceAction as string) ?? 'unknown',
+    generatedBy: (c.generatedBy as string) ?? 'template',
     platform: c.platform as Platform,
     format: (c.format as string) ?? 'text_post',
-    title: c.title as string,
+    status: (c.status as string) ?? 'unknown',
+    title: (c.title as string) ?? '',
     caption: (c.caption as string) ?? '',
     body: (c.body as string) ?? (c.caption as string) ?? '',
     hashtags: (c.hashtags as string[]) ?? [],
@@ -171,14 +176,16 @@ function mapContentItem(raw: Record<string, unknown>): ContentLibraryItem {
     modelActual: c.modelActual as string | undefined,
     taskUsed: c.taskUsed as string | undefined,
     capabilityUsed: c.capabilityUsed as string | undefined,
-    generationStatus: (c.generationStatus as string) ?? 'unknown',
+    generationStatus: (c.generationStatus as string) ?? (c.status as string) ?? 'unknown',
     degraded: c.degraded === true,
     reason: c.reason as string | undefined,
+    rejectionReason: c.rejectionReason as string | undefined,
     assetGenerationStatus: c.assetGenerationStatus as string | undefined,
     mediaJobIds: (c.mediaJobIds as string[]) ?? [],
     mediaAssetIds: (c.mediaAssetIds as string[]) ?? [],
     mediaUrls: (c.mediaUrls as string[]) ?? [],
-    createdAt: c.createdAt as string,
+    sourceBusinessSnapshot: c.sourceBusinessSnapshot as Record<string, unknown> | undefined,
+    createdAt: (c.createdAt as string) ?? '',
     updatedAt: c.updatedAt as string | undefined,
   };
 }
@@ -514,6 +521,22 @@ export const contentApi = {
 
   deleteItem: async (id: string): Promise<void> => {
     await apiFetch<void>(`/content/items/${id}?confirm=true`, { method: 'DELETE' });
+  },
+
+  rejectItem: async (id: string, options?: {
+    reason?: string;
+    feedback?: string;
+    regenerate?: boolean;
+  }): Promise<ContentLibraryItem> => {
+    const data = await apiFetch<Record<string, unknown>>(`/content/items/${id}/reject`, {
+      method: 'POST',
+      body: JSON.stringify({
+        reason: options?.reason ?? null,
+        feedback: options?.feedback ?? null,
+        regenerate: options?.regenerate ?? false,
+      }),
+    });
+    return mapContentItem(data);
   },
 
   scheduleItem: async (id: string, scheduledFor?: string): Promise<ContentLibraryItem> => {
