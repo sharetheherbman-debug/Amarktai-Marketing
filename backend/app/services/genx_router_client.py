@@ -36,7 +36,7 @@ class GenXRouterClient:
             data = response.json()
             return {"ok": True, "models": data.get("data") or data.get("models") or data}
         except Exception as exc:
-            return {"ok": False, "models": [], "error": str(exc)}
+            return {"ok": False, "models": [], "error": "GenX request failed"}
 
     async def get_model(self, model_id: str) -> dict[str, Any]:
         if not self.configured:
@@ -48,7 +48,7 @@ class GenXRouterClient:
                 return {"ok": False, "error": f"HTTP {response.status_code}"}
             return {"ok": True, "model": response.json()}
         except Exception as exc:
-            return {"ok": False, "error": str(exc)}
+            return {"ok": False, "error": "GenX request failed"}
 
     async def create_generation_job(
         self,
@@ -68,7 +68,7 @@ class GenXRouterClient:
                 )
             return {"ok": response.status_code < 400, "status_code": response.status_code, "data": response.json()}
         except Exception as exc:
-            return {"ok": False, "error": str(exc)}
+            return {"ok": False, "error": "GenX request failed"}
 
     async def get_job(self, job_id: str) -> dict[str, Any]:
         return await self.job(job_id)
@@ -81,7 +81,7 @@ class GenXRouterClient:
                 response = await client.get(f"{self.base_url}/api/v1/jobs/{job_id}", headers=self._headers())
             return {"ok": response.status_code < 400, "status_code": response.status_code, "data": response.json()}
         except Exception as exc:
-            return {"ok": False, "error": str(exc)}
+            return {"ok": False, "error": "GenX request failed"}
 
     async def poll_job(
         self,
@@ -123,7 +123,7 @@ class GenXRouterClient:
                 response = await client.get(output_url, headers=self._headers())
             return {"ok": response.status_code < 400, "content": response.content, "content_type": response.headers.get("content-type", "")}
         except Exception as exc:
-            return {"ok": False, "error": str(exc)}
+            return {"ok": False, "error": "GenX request failed"}
 
     async def cancel_job(self, job_id: str) -> dict[str, Any]:
         if not self.configured:
@@ -133,7 +133,7 @@ class GenXRouterClient:
                 response = await client.post(f"{self.base_url}/api/v1/jobs/{job_id}/cancel", headers=self._headers())
             return {"ok": response.status_code < 400, "status_code": response.status_code, "data": response.json()}
         except Exception as exc:
-            return {"ok": False, "error": str(exc)}
+            return {"ok": False, "error": "GenX request failed"}
 
     async def get_credits(self) -> dict[str, Any]:
         if not self.configured:
@@ -145,7 +145,7 @@ class GenXRouterClient:
                 return {"ok": False, "error": f"HTTP {response.status_code}"}
             return {"ok": True, "credits": response.json()}
         except Exception as exc:
-            return {"ok": False, "error": str(exc)}
+            return {"ok": False, "error": "GenX request failed"}
 
     async def get_pricing(self, category: str | None = None) -> dict[str, Any]:
         if not self.configured:
@@ -158,7 +158,7 @@ class GenXRouterClient:
                 return {"ok": False, "error": f"HTTP {response.status_code}"}
             return {"ok": True, "pricing": response.json()}
         except Exception as exc:
-            return {"ok": False, "error": str(exc)}
+            return {"ok": False, "error": "GenX request failed"}
 
     async def test_capability(
         self,

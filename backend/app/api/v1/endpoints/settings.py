@@ -1009,7 +1009,10 @@ async def genx_models(
     from app.services.genx_router_client import GenXRouterClient
     api_key = resolve_user_api_key(db, current_user.id, "GENX_API_KEY", settings.GENX_API_KEY)
     client = GenXRouterClient(api_key=api_key)
-    return await client.list_models(category=category)
+    try:
+        return await client.list_models(category=category)
+    except Exception:
+        return {"ok": False, "models": [], "error": "GenX models request failed."}
 
 
 @router.get("/genx/capabilities")
@@ -1059,7 +1062,10 @@ async def test_genx_capability(
     from app.services.genx_router_client import GenXRouterClient
     api_key = resolve_user_api_key(db, current_user.id, "GENX_API_KEY", settings.GENX_API_KEY)
     client = GenXRouterClient(api_key=api_key)
-    return await client.test_capability(payload.category, model=payload.model, prompt=payload.prompt)
+    try:
+        return await client.test_capability(payload.category, model=payload.model, prompt=payload.prompt)
+    except Exception:
+        return {"ok": False, "error": "GenX capability test failed."}
 
 
 @router.get("/genx/credits")
@@ -1070,7 +1076,10 @@ async def genx_credits(
     from app.services.genx_router_client import GenXRouterClient
     api_key = resolve_user_api_key(db, current_user.id, "GENX_API_KEY", settings.GENX_API_KEY)
     client = GenXRouterClient(api_key=api_key)
-    return await client.get_credits()
+    try:
+        return await client.get_credits()
+    except Exception:
+        return {"ok": False, "error": "GenX credits request failed."}
 
 
 @router.get("/genx/pricing")
@@ -1082,7 +1091,10 @@ async def genx_pricing(
     from app.services.genx_router_client import GenXRouterClient
     api_key = resolve_user_api_key(db, current_user.id, "GENX_API_KEY", settings.GENX_API_KEY)
     client = GenXRouterClient(api_key=api_key)
-    return await client.get_pricing(category=category)
+    try:
+        return await client.get_pricing(category=category)
+    except Exception:
+        return {"ok": False, "error": "GenX pricing request failed."}
 
 
 # ==================== Qwen Sub-Routes ====================
