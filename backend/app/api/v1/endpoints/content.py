@@ -4,13 +4,17 @@ Content endpoints — generate, approve, reject, manage social media content.
 AI generation uses a tiered provider stack (primary → fallback → template).
 Template-based generation is always available as a guaranteed fallback.
 
-Rejecting a post immediately triggers regeneration for the same webapp/platform.
+Rejecting a post marks it as rejected (safe state) and optionally queues
+regeneration for the same webapp/platform in the background.
+
+A rejection can NEVER break the content library, dashboard, or login.
 
 Designed and created by AmarktAI Marketing
 """
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import List
@@ -30,7 +34,13 @@ from app.services.provider_catalog import resolve_user_api_key
 from app.services.business_intelligence import analyze_business
 from app.services.platform_catalog import filter_launch_platforms, launch_platforms, normalize_platform as normalize_catalog_platform
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
+
+# Hashtags that should never appear in generated content unless the business
+# itself is Amarktai or the user explicitly requests them.
+_BANNED_SYSTEM_HASHTAGS = {"#amarktai", "#amarktaimarketing", "#aicontent"}
 
 
 class GenerateAllRequest(BaseModel):
@@ -68,10 +78,28 @@ class ImproveContentRequest(BaseModel):
     audience: str | None = None
 
 
+class RejectItemRequest(BaseModel):
+    reason: str | None = None
+    feedback: str | None = None
+    regenerate: bool = False
+
+
 def _extract_intelligence(webapp) -> dict:
     if isinstance(webapp.scraped_data, dict):
         return webapp.scraped_data
     return {}
+
+
+def _filter_hashtags(hashtags: list, business_name: str = "") -> list:
+    """Remove banned system hashtags unless they belong to the business itself."""
+    bn_lower = (business_name or "").lower()
+    is_amarktai_business = "amarktai" in bn_lower
+    result = []
+    for tag in hashtags:
+        if tag.lower() in _BANNED_SYSTEM_HASHTAGS and not is_amarktai_business:
+            continue
+        result.append(tag)
+    return result
 
 
 def _template_from_intelligence(webapp_data: dict, platform: str, *, objective: str | None = None, tone: str | None = None, include_hashtags: bool = True, include_cta: bool = True) -> dict:
@@ -89,7 +117,8 @@ def _template_from_intelligence(webapp_data: dict, platform: str, *, objective: 
     ).strip()
     hashtags = []
     if include_hashtags:
-        hashtags = [f"#{tag}" for tag in (webapp_data.get("keywords") or [])[:6]]
+        raw_tags = [f"#{tag}" for tag in (webapp_data.get("keywords") or [])[:6]]
+        hashtags = _filter_hashtags(raw_tags, business_name=name)
     return {
         "title": f"{name} • {platform.title()}",
         "caption": caption[:1000],
@@ -246,18 +275,60 @@ def _safe_list(value: object) -> list:
     return value if isinstance(value, list) else []
 
 
+def _safe_str(value: object) -> str:
+    if value is None:
+        return ""
+    return str(value)
+
+
 def _content_item_payload(content: ContentModel) -> dict:
-    metadata = content.generation_metadata or {}
+    """Serialize a ContentModel row into the content library item dict.
+
+    This function must NEVER raise.  Any field access uses safe defaults so that
+    a malformed or partially-populated row does not crash the library endpoint.
+    """
+    try:
+        metadata = content.generation_metadata or {}
+    except Exception:
+        metadata = {}
+
+    try:
+        status_val = content.status.value if hasattr(content.status, "value") else str(content.status or "")
+    except Exception:
+        status_val = "unknown"
+
+    try:
+        type_val = content.type.value if hasattr(content.type, "value") else str(content.type or "")
+    except Exception:
+        type_val = "text"
+
+    # Status in content library: use the DB status field for accuracy
+    db_status = status_val
+    gen_status = metadata.get("generation_status", db_status)
+
+    # Provenance fields
+    source_route = metadata.get("source_route", "unknown")
+    source_action = metadata.get("source_action", "unknown")
+    business_snapshot = metadata.get("source_business_snapshot") or metadata.get("business_snapshot")
+    business_name = _safe_str(
+        (business_snapshot or {}).get("name") if isinstance(business_snapshot, dict) else None
+    ) or metadata.get("business_name", "")
+    rejection_reason = metadata.get("rejection_reason")
+
     return {
-        "id": content.id,
-        "user_id": content.user_id,
-        "webapp_id": content.webapp_id,
+        "id": _safe_str(content.id),
+        "user_id": _safe_str(content.user_id),
+        "webapp_id": _safe_str(content.webapp_id),
+        "business_name": business_name,
         "campaign_id": metadata.get("campaign_id"),
-        "platform": content.platform,
-        "format": metadata.get("format", content.type.value if hasattr(content.type, "value") else str(content.type)),
-        "title": content.title,
-        "caption": content.caption,
-        "body": content.caption,
+        "source_route": source_route,
+        "source_action": source_action,
+        "platform": _safe_str(content.platform),
+        "format": metadata.get("format", type_val),
+        "status": db_status,
+        "title": _safe_str(content.title),
+        "caption": _safe_str(content.caption),
+        "body": _safe_str(content.caption),
         "hashtags": _safe_list(content.hashtags),
         "cta": metadata.get("cta"),
         "image_prompt": metadata.get("image_prompt"),
@@ -274,13 +345,18 @@ def _content_item_payload(content: ContentModel) -> dict:
         "model_actual": metadata.get("model_actual") or metadata.get("model"),
         "task_used": metadata.get("task_used"),
         "capability_used": metadata.get("capability_used"),
-        "generation_status": metadata.get("generation_status", content.status.value if hasattr(content.status, "value") else str(content.status)),
+        "generated_by": metadata.get("provider_actual") or metadata.get("provider_attempted") or "template",
+        "generation_status": gen_status,
         "degraded": bool(metadata.get("degraded")),
         "reason": metadata.get("reason"),
+        "rejection_reason": rejection_reason,
         "asset_generation_status": metadata.get("asset_generation_status"),
         "media_job_ids": _safe_list(metadata.get("media_job_ids")),
         "media_asset_ids": _safe_list(metadata.get("media_asset_ids")),
         "media_urls": _safe_list(content.media_urls),
+        "source_business_snapshot": business_snapshot,
+        "scrape_snapshot": metadata.get("scrape_snapshot"),
+        "prompt_hash": metadata.get("prompt_hash"),
         "created_at": content.created_at,
         "updated_at": content.updated_at,
     }
@@ -292,6 +368,7 @@ async def get_content(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    logger.info("get_content called by user=%s status=%s", current_user.id, content_status)
     query = db.query(ContentModel).filter(ContentModel.user_id == current_user.id)
     if content_status:
         query = query.filter(ContentModel.status == content_status)
@@ -309,17 +386,46 @@ async def list_content_items(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    logger.info("list_content_items user=%s webapp_id=%s status=%s", current_user.id, webapp_id, status)
     query = db.query(ContentModel).filter(ContentModel.user_id == current_user.id)
     if webapp_id:
         query = query.filter(ContentModel.webapp_id == webapp_id)
     if platform:
         query = query.filter(ContentModel.platform == normalize_catalog_platform(platform))
     rows = query.order_by(ContentModel.created_at.desc()).all()
-    payload = [_content_item_payload(item) for item in rows]
+
+    # Serialize each row safely — a bad row must not crash the whole list
+    payload = []
+    for item in rows:
+        try:
+            payload.append(_content_item_payload(item))
+        except Exception as exc:
+            logger.warning("Skipping malformed content row %s: %s", getattr(item, "id", "?"), exc)
+            payload.append({
+                "id": getattr(item, "id", "unknown"),
+                "platform": getattr(item, "platform", "unknown"),
+                "generation_status": "error",
+                "title": "Malformed content record",
+                "caption": "",
+                "body": "",
+                "hashtags": [],
+                "media_job_ids": [],
+                "media_asset_ids": [],
+                "media_urls": [],
+                "degraded": True,
+                "reason": f"Serialization error: {exc}",
+            })
+
     if fmt:
         payload = [item for item in payload if str(item.get("format", "")).lower() == fmt.lower()]
     if status:
-        payload = [item for item in payload if str(item.get("generation_status", "")).lower() == status.lower()]
+        # Filter by both DB status and generation_status for flexibility
+        status_lower = status.lower()
+        payload = [
+            item for item in payload
+            if str(item.get("status", "")).lower() == status_lower
+            or str(item.get("generation_status", "")).lower() == status_lower
+        ]
     if provider:
         payload = [item for item in payload if str(item.get("provider_actual", "")).lower() == provider.lower()]
     if date:
@@ -342,6 +448,54 @@ async def get_content_item_details(
     return _content_item_payload(content)
 
 
+@router.get("/provenance")
+async def get_content_provenance(
+    webapp_id: str | None = None,
+    source_action: str | None = None,
+    status: str | None = None,
+    provider: str | None = None,
+    date: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return provenance records for all content items — where each one came from."""
+    query = db.query(ContentModel).filter(ContentModel.user_id == current_user.id)
+    if webapp_id:
+        query = query.filter(ContentModel.webapp_id == webapp_id)
+    rows = query.order_by(ContentModel.created_at.desc()).all()
+    result = []
+    for item in rows:
+        try:
+            payload = _content_item_payload(item)
+            if source_action and payload.get("source_action", "unknown") != source_action:
+                continue
+            if status:
+                status_lower = status.lower()
+                if str(payload.get("status", "")).lower() != status_lower and str(payload.get("generation_status", "")).lower() != status_lower:
+                    continue
+            if provider and str(payload.get("provider_actual", "")).lower() != provider.lower():
+                continue
+            if date and not str(payload.get("created_at", "")).startswith(date):
+                continue
+            result.append({
+                "id": payload["id"],
+                "webapp_id": payload["webapp_id"],
+                "business_name": payload.get("business_name", ""),
+                "platform": payload["platform"],
+                "status": payload.get("status", ""),
+                "source_route": payload.get("source_route", "unknown"),
+                "source_action": payload.get("source_action", "unknown"),
+                "generated_by": payload.get("generated_by", "template"),
+                "provider_actual": payload.get("provider_actual"),
+                "model_actual": payload.get("model_actual"),
+                "rejection_reason": payload.get("rejection_reason"),
+                "created_at": payload.get("created_at"),
+            })
+        except Exception as exc:
+            logger.warning("Provenance row error for %s: %s", getattr(item, "id", "?"), exc)
+    return result
+
+
 @router.get("/webapp/{webapp_id}")
 async def get_content_for_webapp(
     webapp_id: str,
@@ -354,7 +508,13 @@ async def get_content_for_webapp(
         .order_by(ContentModel.created_at.desc())
         .all()
     )
-    return [_content_item_payload(item) for item in rows]
+    result = []
+    for item in rows:
+        try:
+            result.append(_content_item_payload(item))
+        except Exception as exc:
+            logger.warning("Skipping malformed content row in webapp query %s: %s", getattr(item, "id", "?"), exc)
+    return result
 
 
 @router.delete("/items/{content_id}")
@@ -364,6 +524,7 @@ async def delete_content_item(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    logger.info("delete_content_item user=%s id=%s confirm=%s", current_user.id, content_id, confirm)
     if not confirm:
         raise HTTPException(status_code=400, detail="Set confirm=true to delete this content item.")
     content = db.query(ContentModel).filter(
@@ -374,7 +535,141 @@ async def delete_content_item(
         raise HTTPException(status_code=404, detail="Content not found")
     db.delete(content)
     db.commit()
+    logger.info("Deleted content item %s", content_id)
     return {"deleted": True, "id": content_id}
+
+
+@router.post("/items/{content_id}/reject")
+async def reject_content_item(
+    content_id: str,
+    payload: RejectItemRequest = Body(default_factory=RejectItemRequest),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Reject a content item safely.
+
+    - Sets status=rejected and stores reason/feedback in generation_metadata.
+    - Rejected items remain visible under the 'rejected' filter — they are NOT deleted.
+    - They feed into the learning/improve loop via rejection_reason.
+    - If regenerate=True, a new improved item is created referencing this item
+      as parent_item_id in its metadata.
+    - Rejection can NEVER crash the dashboard, content library, or login.
+    """
+    logger.info(
+        "reject_content_item user=%s id=%s reason=%s regenerate=%s",
+        current_user.id, content_id, payload.reason, payload.regenerate,
+    )
+    content = db.query(ContentModel).filter(
+        ContentModel.id == content_id,
+        ContentModel.user_id == current_user.id,
+    ).first()
+    if not content:
+        raise HTTPException(status_code=404, detail="Content not found")
+
+    # Update status and store rejection context in metadata
+    content.status = ContentStatus.REJECTED
+    try:
+        existing_metadata = dict(content.generation_metadata or {})
+    except Exception:
+        existing_metadata = {}
+    existing_metadata["rejection_reason"] = payload.reason or ""
+    existing_metadata["rejection_feedback"] = payload.feedback or ""
+    content.generation_metadata = existing_metadata
+
+    try:
+        db.commit()
+        db.refresh(content)
+        logger.info("Content item %s set to rejected", content_id)
+    except Exception as exc:
+        db.rollback()
+        logger.error("Failed to set content %s to rejected: %s", content_id, exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to reject content item.") from exc
+
+    # Optionally queue regeneration (non-blocking — failure must not affect this response)
+    if payload.regenerate:
+        rejected_webapp_id = content.webapp_id
+        rejected_platform = content.platform
+        user_id = current_user.id
+
+        async def _regen_after_rejection():
+            from app.db.base import SessionLocal
+            from app.models.webapp import WebApp
+            from app.services.media_service import get_media_url, VIDEO_PLATFORMS
+            regen_db = SessionLocal()
+            try:
+                regen_user = regen_db.query(User).filter(User.id == user_id).first()
+                if not regen_user:
+                    return
+                webapp = regen_db.query(WebApp).filter(
+                    WebApp.id == rejected_webapp_id, WebApp.user_id == user_id
+                ).first()
+                if not webapp:
+                    return
+                hf_token = _get_hf_token(regen_db, regen_user)
+                qwen_key = _get_qwen_key(regen_db, regen_user)
+                openai_key = _get_openai_key(regen_db, regen_user)
+                genx_key = _get_genx_key(regen_db, regen_user)
+                webapp_data = {
+                    "name": webapp.name or "",
+                    "url": str(webapp.url or ""),
+                    "description": webapp.description or "",
+                    "category": getattr(webapp, "category", "") or "",
+                    "target_audience": getattr(webapp, "target_audience", "") or "",
+                    "key_features": webapp.key_features or [],
+                    "products_services": webapp.key_features or [],
+                    "market_location": getattr(webapp, "market_location", "") or "",
+                    "brand_voice": getattr(webapp, "brand_voice", "") or "",
+                }
+                result = await _generate_text_content(
+                    webapp_data, rejected_platform, hf_token, openai_key, qwen_key, genx_key
+                )
+                media_urls = await get_media_url(rejected_platform, webapp_data, qwen_key or hf_token)
+                content_type_val = "video" if rejected_platform in VIDEO_PLATFORMS else "image"
+                generator_name = "genx" if genx_key else ("qwen" if qwen_key else ("huggingface" if hf_token else "template"))
+                new_content = ContentModel(
+                    id=str(uuid.uuid4()),
+                    user_id=user_id,
+                    webapp_id=rejected_webapp_id,
+                    platform=rejected_platform,
+                    type=content_type_val,
+                    status=ContentStatus.PENDING,
+                    title=result.get("title", "Regenerated Content"),
+                    caption=result.get("caption", ""),
+                    hashtags=_filter_hashtags(result.get("hashtags", []), business_name=webapp.name or ""),
+                    media_urls=media_urls,
+                    generation_metadata={
+                        **_generation_package(
+                            rejected_platform, result, generator_name,
+                            "configured" if genx_key else "not_configured",
+                            "Regenerated after rejection.",
+                            bool(genx_key),
+                        ),
+                        "source_route": "/content/items/{id}/reject",
+                        "source_action": "reject_regen",
+                        "parent_item_id": content_id,
+                        "rejection_reason": payload.reason or "",
+                    },
+                )
+                regen_db.add(new_content)
+                regen_db.commit()
+                logger.info(
+                    "Replacement item %s generated after rejection of %s on %s",
+                    new_content.id, content_id, rejected_platform,
+                )
+            except Exception as exc:
+                logger.error(
+                    "Regen after rejection of %s failed: %s", content_id, exc, exc_info=True
+                )
+            finally:
+                try:
+                    regen_db.close()
+                except Exception:
+                    pass
+
+        background_tasks.add_task(_regen_after_rejection)
+
+    return _content_item_payload(content)
 
 
 @router.post("/items/{content_id}/schedule")
@@ -426,7 +721,12 @@ async def duplicate_content_item(
         caption=content.caption,
         hashtags=content.hashtags or [],
         media_urls=content.media_urls or [],
-        generation_metadata={**(content.generation_metadata or {}), "duplicated_from": content.id},
+        generation_metadata={
+            **(content.generation_metadata or {}),
+            "duplicated_from": content.id,
+            "source_route": "/content/items/{id}/duplicate",
+            "source_action": "duplicate",
+        },
     )
     db.add(duplicated)
     db.commit()
@@ -458,10 +758,89 @@ async def improve_content_item(
     )
     metadata = dict(improved.generation_metadata or {})
     metadata["improved_from"] = content.id
+    metadata["source_route"] = "/content/items/{id}/improve"
+    metadata["source_action"] = "improve"
     improved.generation_metadata = metadata
     db.commit()
     db.refresh(improved)
     return _content_item_payload(improved)
+
+
+@router.post("/items/{content_id}/review-grounding")
+async def review_item_grounding(
+    content_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Score business grounding, creative relevance, and hashtag relevance for a content item."""
+    from app.models.webapp import WebApp
+    from app.services.creative_brief_builder import score_creative_relevance, _get_industry_rules
+
+    content = db.query(ContentModel).filter(
+        ContentModel.id == content_id, ContentModel.user_id == current_user.id
+    ).first()
+    if not content:
+        raise HTTPException(status_code=404, detail="Content not found")
+
+    metadata = content.generation_metadata or {}
+    snapshot = metadata.get("source_business_snapshot") or {}
+
+    if not snapshot:
+        webapp = db.query(WebApp).filter(
+            WebApp.id == content.webapp_id, WebApp.user_id == current_user.id
+        ).first()
+        if webapp:
+            snapshot = {
+                "id": webapp.id,
+                "name": webapp.name or "",
+                "category": getattr(webapp, "category", "") or "",
+                "target_audience": getattr(webapp, "target_audience", "") or "",
+                "products_services": webapp.key_features or [],
+            }
+
+    content_text = content.caption or ""
+    image_prompt = metadata.get("image_prompt") or ""
+    hashtags = _safe_list(content.hashtags)
+    business_name = snapshot.get("name", "")
+    category = snapshot.get("category", "")
+
+    # Business grounding score
+    grounding = score_creative_relevance(content_text, image_prompt, snapshot)
+
+    # Hashtag relevance score
+    banned_tags = {"#amarktai", "#amarktaimarketing", "#aicontent"}
+    ht_lower = [h.lower() for h in hashtags]
+    bad_hashtags = [h for h in ht_lower if h in banned_tags]
+    bn_lower = business_name.lower()
+    good_hashtags = [h for h in ht_lower if bn_lower and bn_lower.split()[0] in h] if bn_lower else []
+    hashtag_score = 100
+    if bad_hashtags:
+        hashtag_score -= 30 * len(bad_hashtags)
+    if not good_hashtags and hashtags:
+        hashtag_score -= 10
+    hashtag_score = max(0, hashtag_score)
+
+    issues = list(grounding["issues"])
+    if bad_hashtags:
+        issues.append(f"Banned system hashtags detected: {bad_hashtags}")
+
+    suggested_fix = []
+    if grounding["creative_relevance_score"] < 70:
+        suggested_fix.append(f"Regenerate content with explicit business context for '{business_name}'")
+    if bad_hashtags:
+        suggested_fix.append(f"Remove hashtags: {bad_hashtags} and replace with {category}-specific tags")
+
+    return {
+        "content_id": content_id,
+        "business_grounding_score": grounding["creative_relevance_score"],
+        "creative_relevance_score": grounding["creative_relevance_score"],
+        "hashtag_relevance_score": hashtag_score,
+        "needs_review": grounding["needs_review"] or hashtag_score < 70,
+        "issues": issues,
+        "suggested_fix": suggested_fix,
+        "business_name": business_name,
+        "category": category,
+    }
 
 
 @router.get("/pending", response_model=List[Content])
@@ -548,6 +927,9 @@ async def generate_content(
         "key_features": webapp.key_features or intelligence.get("products_services") or [],
         "products_services": intelligence.get("products_services") or webapp.key_features or [],
         "keywords": intelligence.get("keywords") or [],
+        "market_location": getattr(webapp, "market_location", "") or "",
+        "brand_voice": getattr(webapp, "brand_voice", "") or "",
+        "social_links": intelligence.get("social_links") or [],
     }
     if product_focus:
         webapp_data["products_services"] = [product_focus, *list(webapp_data.get("products_services") or [])][:5]
@@ -557,6 +939,19 @@ async def generate_content(
         webapp_data["objective"] = objective
     if tone:
         webapp_data["tone"] = tone
+
+    # Snapshot of the business used at generation time (provenance)
+    source_business_snapshot = {
+        "id": webapp.id,
+        "name": webapp.name or "",
+        "url": str(webapp.url or ""),
+        "description": webapp.description or "",
+        "category": webapp.category or "",
+        "target_audience": webapp_data["target_audience"],
+        "products_services": webapp_data["products_services"],
+        "market_location": webapp_data.get("market_location", ""),
+        "brand_voice": webapp_data.get("brand_voice", ""),
+    }
 
     generation_warnings = list(intelligence.get("warnings") or [])
     result = {}
@@ -578,6 +973,9 @@ async def generate_content(
             include_cta=include_cta,
         )
 
+    # Filter banned system hashtags from result
+    result["hashtags"] = _filter_hashtags(result.get("hashtags", []), business_name=webapp.name or "")
+
     media_urls = await get_media_url(platform, webapp_data, qwen_key or hf_token)
     content_type = "video" if platform in VIDEO_PLATFORMS else "image"
     genx_configured = bool(genx_key)
@@ -598,6 +996,11 @@ async def generate_content(
         "customer_conversion_suggestions": ["Use clear CTA and audience-specific value proposition."],
         "follower_growth_suggestions": ["Iterate hooks and posting cadence from performance data."],
     }
+
+    logger.info(
+        "generate_content user=%s webapp=%s platform=%s provider=%s",
+        current_user.id, webapp_id, platform, provider_name,
+    )
 
     db_content = ContentModel(
         id=str(uuid.uuid4()),
@@ -628,6 +1031,10 @@ async def generate_content(
                 scrape_status=intelligence.get("scrape_status", "failed"),
                 platform_review=platform_review,
             ),
+            "source_route": "/content/generate",
+            "source_action": "single_generate",
+            "source_business_snapshot": source_business_snapshot,
+            "business_name": webapp.name or "",
             "provider_actual": provider_name,
             "provider_attempted": provider_attempted,
             "generation_status": generation_status,
@@ -733,11 +1140,27 @@ async def generate_creative(
     strategy = select_formats(payload.platform, requested_format=payload.format, auto_select=payload.auto_select_format)
     selected_format = strategy["formats"][0]
     webapp_data = {
-        "name": webapp.name,
-        "description": webapp.description,
-        "target_audience": payload.audience or webapp.target_audience,
-        "objective": payload.objective,
-        "tone": payload.tone,
+        "name": webapp.name or "",
+        "description": webapp.description or "",
+        "category": getattr(webapp, "category", "") or "",
+        "target_audience": payload.audience or getattr(webapp, "target_audience", "") or "",
+        "objective": payload.objective or "",
+        "tone": payload.tone or "",
+        "key_features": webapp.key_features or [],
+        "products_services": webapp.key_features or [],
+        "market_location": getattr(webapp, "market_location", "") or "",
+        "brand_voice": getattr(webapp, "brand_voice", "") or "",
+    }
+    source_business_snapshot = {
+        "id": webapp.id,
+        "name": webapp.name or "",
+        "url": str(getattr(webapp, "url", "") or ""),
+        "description": webapp.description or "",
+        "category": getattr(webapp, "category", "") or "",
+        "target_audience": webapp_data["target_audience"],
+        "products_services": webapp_data["products_services"],
+        "market_location": webapp_data.get("market_location", ""),
+        "brand_voice": webapp_data.get("brand_voice", ""),
     }
 
     result: dict[str, object] = {
@@ -826,6 +1249,10 @@ async def generate_creative(
     degraded = generation_status != "success"
     generation_metadata = {
         "format": selected_format,
+        "source_route": "/content/generate-creative",
+        "source_action": "creative_generate",
+        "source_business_snapshot": source_business_snapshot,
+        "business_name": webapp.name or "",
         "provider_attempted": "genx" if genx_key else ("qwen" if qwen_key else ("huggingface" if hf_token else "template")),
         "provider_actual": provider_actual,
         "model_actual": model_or_task,
@@ -850,7 +1277,7 @@ async def generate_creative(
         "cta": result.get("cta"),
     }
     media_urls = [str(url) for url in [result.get("image_url"), result.get("video_url"), result.get("avatar_url")] if isinstance(url, str) and url]
-    hashtags = _safe_list(result.get("hashtags"))
+    hashtags = _filter_hashtags(_safe_list(result.get("hashtags")), business_name=webapp.name or "")
     if persisted_content_id is None:
         db_content = ContentModel(
             id=str(uuid.uuid4()),

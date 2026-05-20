@@ -121,7 +121,13 @@ class AIProvider:
             return None
         result = await self._genx.generate_text(
             prompt,
-            system="You are an expert social media assistant for AmarktAI Marketing.",
+            system=(
+                "You are an expert social media content creator. "
+                "Your job is to write content that markets a specific business. "
+                "Always keep content grounded to the business name, industry, and products/services provided. "
+                "Never mention Amarktai, AmarktAI, or AI tool names unless the business itself is Amarktai. "
+                "Hashtags must reflect the business industry and audience, not the AI platform."
+            ),
             task="copy",
             max_tokens=max_tokens,
         )
@@ -419,13 +425,36 @@ class AIProvider:
             except Exception as exc:
                 logger.warning("HuggingFaceGenerator.generate_content failed: %s", exc)
 
-        # Fallback: build a simple prompt and call provider chain
+        # Fallback: build a business-specific prompt and call provider chain
         name = webapp_data.get("name", "our business")
         description = webapp_data.get("description", "")
+        category = webapp_data.get("category", "")
+        target_audience = webapp_data.get("target_audience", "")
+        products_services = webapp_data.get("products_services") or webapp_data.get("key_features") or []
+        if isinstance(products_services, list):
+            products_str = ", ".join(str(p) for p in products_services[:3]) if products_services else ""
+        else:
+            products_str = str(products_services)
+        market_location = webapp_data.get("market_location", "")
+        brand_voice = webapp_data.get("brand_voice", "")
+        keywords = webapp_data.get("keywords") or []
+        keywords_str = ", ".join(str(k) for k in keywords[:8]) if keywords else ""
+
+        location_line = f" Market: {market_location}." if market_location else ""
+        voice_line = f" Brand voice: {brand_voice}." if brand_voice else ""
+        products_line = f" Products/services: {products_str}." if products_str else ""
+        audience_line = f" Target audience: {target_audience}." if target_audience else ""
+        category_line = f" Industry/category: {category}." if category else ""
+        keywords_line = f" Keywords for hashtags: {keywords_str}." if keywords_str else ""
+
         prompt = (
-            f"Write a short {platform} social media post for {name}. "
-            f"Business description: {description}. "
-            f"Include relevant hashtags."
+            f"Write a short {platform} social media post for the following business. "
+            f"Business name: {name}. "
+            f"Description: {description}.{category_line}{products_line}{audience_line}{location_line}{voice_line}{keywords_line} "
+            f"IMPORTANT: Market {name} specifically. Do NOT mention Amarktai or AmarktAI unless {name} is Amarktai. "
+            f"Use hashtags relevant to {name}, its industry ({category or 'business'}), and its products/services. "
+            f"Do NOT use generic system hashtags like #Amarktai, #AmarktaiMarketing, or #AIContent. "
+            f"Make the content specific and authentic to {name}."
         )
         raw = await self._generate_raw(prompt, max_tokens=300)
         text = raw["text"]

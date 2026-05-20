@@ -206,20 +206,24 @@ def register(request: Request, body: RegisterRequest, db: Session = Depends(get_
 @_limiter.limit("5/minute")
 def login(request: Request, body: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse:
     """Authenticate a user and return an access token."""
+    logger.info("Login attempt for email=%s", body.email)
     user = db.query(UserModel).filter(UserModel.email == body.email).first()
 
     if not user or not user.hashed_password:
+        logger.warning("Login failed (no user) for email=%s", body.email)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password.",
         )
 
     if not verify_password(body.password, user.hashed_password):
+        logger.warning("Login failed (bad password) for email=%s", body.email)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password.",
         )
 
+    logger.info("Login success for user_id=%s email=%s", user.id, body.email)
     return _build_token_response(user)
 
 

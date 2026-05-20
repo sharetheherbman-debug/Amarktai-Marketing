@@ -5,6 +5,7 @@ import { Loader2 } from 'lucide-react';
 import AuthProvider from '@/components/auth/AuthProvider';
 import PwaInstallBanner from '@/components/ui/PwaInstallBanner';
 import { useAuth } from '@/lib/auth';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 // Lazy load pages
 const LandingPage = lazy(() => import('@/app/page'));
@@ -89,11 +90,13 @@ function AppRoutes() {
           path="/dashboard"
           element={
             <ProtectedRoute>
-              <DashboardLayout />
+              <ErrorBoundary label="Dashboard">
+                <DashboardLayout />
+              </ErrorBoundary>
             </ProtectedRoute>
           }
         >
-          <Route index element={<DashboardPage />} />
+          <Route index element={<ErrorBoundary label="Dashboard Home"><DashboardPage /></ErrorBoundary>} />
           <Route path="businesses" element={<WebAppsPage />} />
           <Route path="businesses/new" element={<NewWebAppPage />} />
           <Route path="businesses/:id" element={<BusinessDetailPage />} />
@@ -101,7 +104,7 @@ function AppRoutes() {
           <Route path="webapps/new" element={<Navigate to="/dashboard/businesses/new" replace />} />
           <Route path="webapps/edit/:id" element={<EditWebAppPage />} />
           <Route path="webapps/:id" element={<BusinessDetailPage />} />
-          <Route path="content" element={<ContentPage />} />
+          <Route path="content" element={<ErrorBoundary label="Content Studio"><ContentPage /></ErrorBoundary>} />
           <Route path="approval" element={<ApprovalPage />} />
           <Route path="scheduler" element={<SchedulerPage />} />
           <Route path="analytics" element={<AnalyticsPage />} />

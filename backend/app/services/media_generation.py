@@ -25,7 +25,24 @@ async def _generate_text(webapp_data: dict[str, Any], prompt: str, *, qwen_key: 
 
 
 async def generate_image_prompt(webapp_data: dict[str, Any], platform: str, **kwargs: Any) -> dict[str, Any]:
-    prompt = f"Create a high-quality {platform} image prompt for {webapp_data.get('name', 'the business')} targeting {webapp_data.get('target_audience', 'the audience')}."
+    name = webapp_data.get("name", "the business")
+    category = webapp_data.get("category", "")
+    description = webapp_data.get("description", "")
+    audience = webapp_data.get("target_audience", "")
+    products = webapp_data.get("products_services") or webapp_data.get("key_features") or []
+    products_str = ", ".join(str(p) for p in products[:3]) if isinstance(products, list) and products else str(products or "")
+    category_line = f"Industry/category: {category}." if category else ""
+    products_line = f"Products/services: {products_str}." if products_str else ""
+    audience_line = f"Target audience: {audience}." if audience else ""
+    prompt = (
+        f"Create a high-quality {platform} image prompt for {name}. "
+        f"{category_line} {products_line} {audience_line} "
+        f"Description: {description}. "
+        f"The image must be directly relevant to {name} and its industry ({category or 'business'}). "
+        f"IMPORTANT: Do NOT use generic or unrelated imagery. "
+        f"Do NOT show Amarktai branding unless {name} is Amarktai. "
+        f"Show imagery that immediately communicates what {name} does."
+    )
     generated = await _generate_text(webapp_data, prompt, **kwargs)
     return {"image_prompt": generated["text"], "provider": generated["provider"]}
 
@@ -55,7 +72,17 @@ async def generate_image_asset(*, image_prompt: str, hf_token: str | None = None
 
 
 async def generate_video_script(webapp_data: dict[str, Any], platform: str, **kwargs: Any) -> dict[str, Any]:
-    prompt = f"Write a concise {platform} video script for {webapp_data.get('name', 'the business')} with hook, 3 beats, and CTA."
+    name = webapp_data.get("name", "the business")
+    category = webapp_data.get("category", "")
+    description = webapp_data.get("description", "")
+    products = webapp_data.get("products_services") or webapp_data.get("key_features") or []
+    products_str = ", ".join(str(p) for p in products[:3]) if isinstance(products, list) and products else str(products or "")
+    prompt = (
+        f"Write a concise {platform} video script for {name}. "
+        f"Industry: {category}. Products/services: {products_str}. Description: {description}. "
+        f"Structure: hook, 3 content beats specific to {name}, and CTA. "
+        f"Keep the script grounded to what {name} actually does."
+    )
     generated = await _generate_text(webapp_data, prompt, **kwargs)
     return {"video_script": generated["text"], "provider": generated["provider"]}
 
