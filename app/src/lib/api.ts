@@ -191,8 +191,14 @@ export const webAppApi = {
     return mapWebApp(data);
   },
 
-  delete: async (id: string): Promise<void> => {
-    await apiFetch<void>(`/webapps/${id}`, { method: 'DELETE' });
+  delete: async (id: string, confirm = true): Promise<{
+    deleted: boolean;
+    id: string;
+    content_deleted: number;
+    schedules_deleted: number;
+    message: string;
+  }> => {
+    return apiFetch(`/webapps/${id}?confirm=${String(confirm)}`, { method: 'DELETE' });
   },
 
   create: async (

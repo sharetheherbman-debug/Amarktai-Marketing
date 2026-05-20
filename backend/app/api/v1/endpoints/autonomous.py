@@ -16,6 +16,7 @@ from app.models.user import User
 from app.models.webapp import WebApp
 
 router = APIRouter()
+_AUTONOMOUS_CAMPAIGNS: dict[str, dict] = {}
 
 class BatchApproveRequest(BaseModel):
     content_ids: List[str]
@@ -30,6 +31,16 @@ class CampaignPlanRequest(BaseModel):
     webapp_id: str
     goals: list[str] = []
     platforms: list[str] = ["facebook", "instagram", "linkedin", "twitter", "tiktok", "youtube", "reddit"]
+
+
+class AutonomousStartCampaignRequest(BaseModel):
+    webapp_id: str
+    goal: str
+    duration_days: int = 7
+    platforms: list[str] = ["instagram", "facebook", "linkedin", "twitter", "tiktok", "youtube", "reddit", "pinterest"]
+    auto_generate: bool = True
+    auto_schedule: bool = False
+    auto_post: bool = False
 
 
 @router.post("/campaign-plan")
@@ -81,6 +92,67 @@ async def generate_campaign_plan(
         "best_time_recommendations": {p: best_times.get(p, "Wed 12:00") for p in platforms},
         "compliance_warnings": compliance_warnings,
     }
+
+
+@router.post("/start-campaign")
+async def start_autonomous_campaign(
+    payload: AutonomousStartCampaignRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    webapp = db.query(WebApp).filter(
+        WebApp.id == payload.webapp_id,
+        WebApp.user_id == current_user.id,
+    ).first()
+    if not webapp:
+        raise HTTPException(status_code=404, detail="Web app not found")
+
+    campaign_id = f"camp-{datetime.utcnow().timestamp():.0f}-{current_user.id[:6]}"
+    oauth_verified = False
+    worker_verified = bool(settings.REDIS_URL)
+    if payload.auto_post and not (oauth_verified and worker_verified):
+        auto_post_status = "blocked"
+        auto_post_message = "Auto-post is disabled until OAuth scopes, targets, and worker runtime are verified."
+    else:
+        auto_post_status = "disabled" if not payload.auto_post else "enabled"
+        auto_post_message = "Auto-post not requested." if not payload.auto_post else "Auto-post enabled."
+
+    campaign = {
+        "id": campaign_id,
+        "user_id": current_user.id,
+        "webapp_id": payload.webapp_id,
+        "goal": payload.goal,
+        "duration_days": payload.duration_days,
+        "platforms": payload.platforms,
+        "auto_generate": payload.auto_generate,
+        "auto_schedule": payload.auto_schedule,
+        "auto_post": payload.auto_post,
+        "auto_post_status": auto_post_status,
+        "auto_post_message": auto_post_message,
+        "created_at": datetime.utcnow().isoformat(),
+        "draft_ids": [],
+    }
+    _AUTONOMOUS_CAMPAIGNS[campaign_id] = campaign
+    return campaign
+
+
+@router.get("/campaigns")
+async def list_autonomous_campaigns(
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    campaigns = [item for item in _AUTONOMOUS_CAMPAIGNS.values() if item.get("user_id") == current_user.id]
+    return {"campaigns": campaigns}
+
+
+@router.get("/campaigns/{campaign_id}")
+async def get_autonomous_campaign(
+    campaign_id: str,
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    campaign = _AUTONOMOUS_CAMPAIGNS.get(campaign_id)
+    if not campaign or campaign.get("user_id") != current_user.id:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    return campaign
 
 @router.post("/batch-approve")
 async def batch_approve_content(

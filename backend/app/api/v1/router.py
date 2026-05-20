@@ -6,6 +6,7 @@ from app.api.v1.endpoints import (
     remix, tools, leads, groups, blog, oauth, billing, events,
     amarktai_status, dashboard, settings, contact,
     stats, changelog, notifications, scheduler, publishing, social_rules,
+    capabilities, platform_intelligence, agents, learning,
 )
 
 api_router = APIRouter()
@@ -71,3 +72,7 @@ api_router.include_router(changelog.router, prefix="/changelog", tags=["changelo
 
 # Notifications (auth required)
 api_router.include_router(notifications.router, prefix="/notifications", tags=["notifications"])
+api_router.include_router(capabilities.router, prefix="/capabilities", tags=["capabilities"])
+api_router.include_router(platform_intelligence.router, prefix="/platform-intelligence", tags=["platform-intelligence"])
+api_router.include_router(agents.router, prefix="/agents", tags=["agents"])
+api_router.include_router(learning.router, prefix="/learning", tags=["learning"])

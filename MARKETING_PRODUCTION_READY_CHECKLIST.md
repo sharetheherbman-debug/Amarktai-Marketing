@@ -1,20 +1,42 @@
 # Marketing Production Ready Checklist
 
-- [x] Add Business flow supports name-only, url-only, and name+url.
-- [x] Bare domains normalize to `https://`.
-- [x] `/api/v1/webapps/` list/create/get/update endpoints return safe serialized JSON and avoid legacy-row serialization crashes.
-- [x] Webapp creation preserves business creation even when website scraping fails.
-- [x] `/api/v1/integrations/platforms` returns launch-platform readiness payload without 500s.
-- [x] Integrations UI only enables OAuth connect when OAuth is configured and posting is supported.
-- [x] Provider key test and debug endpoints return actionable, non-secret JSON and avoid 500s.
-- [x] Integrations page shows Save / Test / Debug and visible last-result panels.
-- [x] User-facing dashboard/settings copy removes beta wording.
-- [x] Scheduler page shows real scheduled content or a truthful empty state.
-- [x] Scheduler page shows a production-safe banner when automatic publishing is not configured.
-- [x] VPS runtime permissions script fixes repo ownership/mode before deploy reset.
-- [x] Deploy docs include running permission fix before git fetch/reset.
-- [x] Gate script now reports endpoint failures with response body and final verdict.
-- [ ] Remaining blocker: GenX provider still failing in runtime (if provider test fails in environment).
-- [ ] Remaining blocker: Firecrawl provider still failing in runtime (if provider test fails in environment).
-- [ ] Remaining blocker: OAuth app credentials not configured for posting.
-- [ ] Remaining blocker: automatic posting worker/runtime not configured.
+- [x] Login, Add Business, webapps list/create/get/update remain active.
+- [x] Business deletion now requires explicit confirmation and performs owned-only cleanup.
+- [x] Smoke/test business cleanup endpoint added for current user only.
+- [x] Firecrawl scrape/analyze and integrations/platform readiness remain available.
+- [x] Existing `/api/v1/content/generate` and `/api/v1/content/generate-all` still work in limited mode.
+- [x] Provider truth endpoints used as source of UI/runtime truth:
+  - `/api/v1/settings/provider-resolution`
+  - `/api/v1/settings/readiness`
+  - `/api/v1/settings/api-keys/test`
+  - `/api/v1/settings/genx/debug-test`
+  - `/api/v1/settings/firecrawl/debug-test`
+- [x] GenX models/capabilities endpoints:
+  - `/api/v1/settings/genx/models`
+  - `/api/v1/settings/genx/capabilities`
+- [x] Hugging Face task router endpoints:
+  - `/api/v1/settings/huggingface/tasks`
+  - `/api/v1/settings/huggingface/test-task`
+- [x] Unified capabilities endpoint:
+  - `/api/v1/capabilities`
+- [x] Platform intelligence endpoints:
+  - `/api/v1/platform-intelligence`
+  - `/api/v1/platform-intelligence/{platform}`
+  - `/api/v1/platform-intelligence/review-content`
+- [x] Creative multimodal endpoints:
+  - `/api/v1/content/generate-creative`
+  - `/api/v1/content/generate-pack`
+- [x] Agent status endpoint:
+  - `/api/v1/agents/status`
+- [x] Learning endpoints:
+  - `/api/v1/learning/run-now`
+  - `/api/v1/learning/status`
+  - `/api/v1/learning/insights`
+  - `/api/v1/learning/insights/{webapp_id}`
+- [x] Autonomous campaign endpoints:
+  - `/api/v1/autonomous/start-campaign`
+  - `/api/v1/autonomous/campaigns`
+  - `/api/v1/autonomous/campaigns/{id}`
+- [x] Frontend build passes.
+- [x] Backend import/compile passes.
+- [ ] FULL_AUTONOMY_READY depends on live provider/model validity, OAuth scopes, and worker runtime in deployment.

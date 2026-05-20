@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     # GenX (primary unified AI provider)
     GENX_API_KEY: str = ""
     GENX_BASE_URL: str = "https://query.genx.sh/v1"
-    GENX_DEFAULT_MODEL: str = "genx-chat-pro"
+    GENX_DEFAULT_MODEL: str = ""
     GENX_TIMEOUT: int = 60
     GENX_MODEL_ALLOWLIST: str = ""  # comma-separated model IDs
     GENX_MODEL_FALLBACKS: str = ""  # comma-separated ordered fallback model IDs

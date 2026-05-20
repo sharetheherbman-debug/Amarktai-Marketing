@@ -6,7 +6,7 @@ import json
 import logging
 import re
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Response, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, File, HTTPException, Query, Response, UploadFile, status
 from pydantic import BaseModel
 from sqlalchemy import inspect, Table, MetaData, select, insert
 from sqlalchemy.orm import Session
@@ -14,6 +14,10 @@ import uuid
 
 from app.db.base import get_db
 from app.models.webapp import WebApp as WebAppModel, MAX_BUSINESSES_PER_USER
+from app.models.content import Content as ContentModel, ContentStatus
+from app.models.analytics import Analytics as AnalyticsModel
+from app.models.engagement import ABTest as ABTestModel
+from app.models.tools import ContentRemix as ContentRemixModel, FeedbackAnalysis as FeedbackAnalysisModel, ViralSparkReport as ViralSparkReportModel, AudienceMapReport as AudienceMapReportModel
 from app.models.user import User
 from app.schemas.webapp import WebApp, WebAppCreate, WebAppUpdate
 from app.api.deps import get_current_user, is_admin_user
@@ -23,6 +27,15 @@ from app.core.config import settings
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+_SMOKE_TEST_BUSINESS_NAMES = (
+    "Production Flow Test",
+    "Production Flow Business",
+    "Beta Flow Business",
+    "Example Business",
+    "Manual Beta Business",
+    "Trace Test Business",
+)
 
 _WEBAPPS_REQUIRED_COLUMNS: dict[str, str] = {
     "id": "VARCHAR(36) NOT NULL",
@@ -220,6 +233,55 @@ def _iso_datetime(value: Any) -> str | None:
     if isinstance(value, str) and value.strip():
         return value
     return None
+
+
+class DeleteBusinessRequest(BaseModel):
+    confirm: bool = False
+
+
+def _delete_related_business_records(db: Session, *, user_id: str, webapp_id: str) -> tuple[int, int]:
+    content_rows = db.query(ContentModel).filter(
+        ContentModel.user_id == user_id,
+        ContentModel.webapp_id == webapp_id,
+    ).all()
+    content_ids = [row.id for row in content_rows]
+    schedules_deleted = sum(1 for row in content_rows if row.status == ContentStatus.SCHEDULED)
+    content_deleted = len(content_rows)
+
+    if content_ids:
+        db.query(AnalyticsModel).filter(
+            AnalyticsModel.user_id == user_id,
+            AnalyticsModel.content_id.in_(content_ids),
+        ).delete(synchronize_session=False)
+
+    db.query(ABTestModel).filter(
+        ABTestModel.user_id == user_id,
+        ABTestModel.webapp_id == webapp_id,
+    ).delete(synchronize_session=False)
+
+    db.query(ContentRemixModel).filter(
+        ContentRemixModel.user_id == user_id,
+        ContentRemixModel.webapp_id == webapp_id,
+    ).delete(synchronize_session=False)
+    db.query(FeedbackAnalysisModel).filter(
+        FeedbackAnalysisModel.user_id == user_id,
+        FeedbackAnalysisModel.webapp_id == webapp_id,
+    ).delete(synchronize_session=False)
+    db.query(ViralSparkReportModel).filter(
+        ViralSparkReportModel.user_id == user_id,
+        ViralSparkReportModel.webapp_id == webapp_id,
+    ).delete(synchronize_session=False)
+    db.query(AudienceMapReportModel).filter(
+        AudienceMapReportModel.user_id == user_id,
+        AudienceMapReportModel.webapp_id == webapp_id,
+    ).delete(synchronize_session=False)
+
+    db.query(ContentModel).filter(
+        ContentModel.user_id == user_id,
+        ContentModel.webapp_id == webapp_id,
+    ).delete(synchronize_session=False)
+
+    return content_deleted, schedules_deleted
 
 
 def _coerce_content_goals(content_goals_value: Any) -> str:
@@ -744,23 +806,66 @@ async def update_webapp(
         _log_route_exception(f"/api/v1/webapps/{webapp_id}", current_user.id, exc)
         raise HTTPException(status_code=500, detail="Failed to update business.")
 
-@router.delete("/{webapp_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{webapp_id}")
 async def delete_webapp(
     webapp_id: str,
+    confirm: bool = Query(default=False),
+    payload: DeleteBusinessRequest | None = Body(default=None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Delete a web app."""
+    """Delete a web app with explicit confirmation and related cleanup."""
     db_webapp = db.query(WebAppModel).filter(
         WebAppModel.id == webapp_id,
         WebAppModel.user_id == current_user.id,
     ).first()
     if not db_webapp:
-        raise HTTPException(status_code=404, detail="Web app not found")
+        raise HTTPException(status_code=404, detail={"message": "Business not found.", "id": webapp_id})
+
+    confirmed = bool(confirm or (payload.confirm if payload else False))
+    if not confirmed:
+        raise HTTPException(
+            status_code=400,
+            detail="Deletion requires confirmation. Retry with ?confirm=true.",
+        )
+
+    content_deleted, schedules_deleted = _delete_related_business_records(
+        db,
+        user_id=current_user.id,
+        webapp_id=webapp_id,
+    )
 
     db.delete(db_webapp)
     db.commit()
-    return None
+    return {
+        "deleted": True,
+        "id": webapp_id,
+        "content_deleted": content_deleted,
+        "schedules_deleted": schedules_deleted,
+        "message": "Business removed.",
+    }
+
+
+@router.post("/cleanup-smoke")
+async def cleanup_smoke_businesses(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    businesses = db.query(WebAppModel).filter(
+        WebAppModel.user_id == current_user.id,
+    ).all()
+    removed: list[str] = []
+    for business in businesses:
+        if (business.name or "").strip() in _SMOKE_TEST_BUSINESS_NAMES:
+            _delete_related_business_records(
+                db,
+                user_id=current_user.id,
+                webapp_id=business.id,
+            )
+            db.delete(business)
+            removed.append(business.id)
+    db.commit()
+    return {"deleted_count": len(removed), "deleted_ids": removed}
 
 
 # ---------------------------------------------------------------------------

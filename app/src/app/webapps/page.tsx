@@ -1,11 +1,21 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertCircle, ArrowRight, Building2, Globe, Loader2, Plus } from 'lucide-react';
+import { AlertCircle, ArrowRight, Building2, Globe, Loader2, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { webAppApi } from '@/lib/api';
 import type { WebApp } from '@/types';
 
@@ -22,6 +32,8 @@ export default function BusinessListPage() {
   const [businesses, setBusinesses] = useState<WebApp[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshingId, setRefreshingId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<WebApp | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const loadBusinesses = async () => {
     try {
@@ -31,6 +43,22 @@ export default function BusinessListPage() {
       toast.error('Failed to load businesses');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    setDeletingId(deleteTarget.id);
+    try {
+      await webAppApi.delete(deleteTarget.id, true);
+      toast.success('Business removed.');
+      window.dispatchEvent(new CustomEvent('amarktai:webapps-changed'));
+      await loadBusinesses();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to delete business');
+    } finally {
+      setDeletingId(null);
+      setDeleteTarget(null);
     }
   };
 
@@ -160,6 +188,14 @@ export default function BusinessListPage() {
                         Generate Content
                       </Button>
                     </Link>
+                    <Button
+                      variant="outline"
+                      onClick={() => setDeleteTarget(business)}
+                      className="border-red-500/40 bg-red-500/10 text-red-200 hover:bg-red-500/20"
+                    >
+                      <Trash2 className="mr-2 h-4 w-4" />
+                      Delete
+                    </Button>
                   </div>
                 </CardContent>
               </Card>
@@ -167,6 +203,23 @@ export default function BusinessListPage() {
           })}
         </div>
       )}
+      <AlertDialog open={Boolean(deleteTarget)} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <AlertDialogContent className="border-[#252A3A] bg-[#0D0F14] text-white">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Business</AlertDialogTitle>
+            <AlertDialogDescription className="text-slate-300">
+              Delete this business and its generated drafts? This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="border-[#252A3A] bg-transparent text-slate-200 hover:bg-white/5">Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDelete} disabled={deletingId !== null} className="bg-red-600 text-white hover:bg-red-500">
+              {deletingId ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Delete Business
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

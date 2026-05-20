@@ -21,6 +21,7 @@ from app.db.session import get_db
 from app.models.user import User
 from app.models.user_api_key import UserAPIKey
 from app.services.genx_client import GenXClient
+from app.services.huggingface_task_router import HuggingFaceTaskRouter
 from app.services.posting_readiness import PLATFORM_KEYS, publishing_readiness
 from app.services.provider_catalog import (
     GLOBAL_ENV_KEYS,
@@ -58,6 +59,11 @@ class APIKeyTestRequest(BaseModel):
 
 class FirecrawlTestRequest(BaseModel):
     key_value: str | None = None
+
+
+class HuggingFaceTaskTestRequest(BaseModel):
+    task: str
+    model_override: str | None = None
 
 
 def _safe_preview(value: str | None, limit: int = 300) -> str:
@@ -172,8 +178,16 @@ def _configured_genx_models() -> dict[str, Any]:
     task_models = _genx_task_models()
     fallback_models = [m.strip() for m in (settings.GENX_MODEL_FALLBACKS or "").split(",") if m.strip()]
     allowlist = [m.strip() for m in (settings.GENX_MODEL_ALLOWLIST or "").split(",") if m.strip()]
+    effective_default = (
+        default_model
+        or task_models.get("copy")
+        or task_models.get("strategy")
+        or task_models.get("analysis")
+        or (fallback_models[0] if fallback_models else "")
+    )
     return {
         "default_model": default_model,
+        "effective_default_model": effective_default,
         "task_models": task_models,
         "fallback_models": fallback_models,
         "allowlist": allowlist,
@@ -185,15 +199,30 @@ async def _run_genx_test(api_key: str) -> dict[str, Any]:
     client = GenXClient(
         api_key=api_key,
         base_url=settings.GENX_BASE_URL,
-        default_model=configured["default_model"],
+        default_model=configured["effective_default_model"],
     )
     health = await client.health_check()
     return {
         "ok": bool(health.get("ok")),
         "error": health.get("error"),
         "latency_ms": health.get("latency_ms", 0),
-        "model": health.get("model") or configured["default_model"],
+        "model": health.get("model") or configured["effective_default_model"],
         "base_url": settings.GENX_BASE_URL,
+    }
+
+
+def _genx_capabilities_from_config() -> dict[str, Any]:
+    configured = _configured_genx_models()
+    task_models = configured["task_models"]
+    return {
+        "text_copy": {"model": task_models.get("copy") or configured["effective_default_model"], "configured": bool(task_models.get("copy") or configured["effective_default_model"])},
+        "strategy": {"model": task_models.get("strategy") or configured["effective_default_model"], "configured": bool(task_models.get("strategy") or configured["effective_default_model"])},
+        "analysis": {"model": task_models.get("analysis") or configured["effective_default_model"], "configured": bool(task_models.get("analysis") or configured["effective_default_model"])},
+        "image": {"model": task_models.get("image"), "configured": bool(task_models.get("image"))},
+        "video": {"model": task_models.get("video"), "configured": bool(task_models.get("video"))},
+        "voice": {"model": task_models.get("audio"), "configured": bool(task_models.get("audio"))},
+        "avatar": {"model": task_models.get("audio"), "configured": bool(task_models.get("audio"))},
+        "kling_video": {"model": task_models.get("video"), "configured": bool(task_models.get("video"))},
     }
 
 
@@ -433,7 +462,7 @@ async def get_genx_models(
 ) -> dict[str, Any]:
     genx_key = resolve_user_api_key(db, current_user.id, "GENX_API_KEY", settings.GENX_API_KEY)
     configured = _configured_genx_models()
-    client = GenXClient(api_key=genx_key, base_url=settings.GENX_BASE_URL, default_model=configured["default_model"])
+    client = GenXClient(api_key=genx_key, base_url=settings.GENX_BASE_URL, default_model=configured["effective_default_model"])
 
     available = await client.list_models()
     source = available.get("source", "configured_env")
@@ -443,15 +472,32 @@ async def get_genx_models(
         available_models = sorted({m for m in seeded if m})
 
     return {
-        "configured": bool(genx_key and settings.GENX_BASE_URL and configured["default_model"]),
+        "configured": bool(genx_key and settings.GENX_BASE_URL and configured["effective_default_model"]),
         "base_url": settings.GENX_BASE_URL,
-        "default_model": configured["default_model"],
+        "default_model": configured["effective_default_model"],
         "task_models": configured["task_models"],
         "fallback_models": configured["fallback_models"],
         "allowlist": configured["allowlist"],
         "available_models": available_models,
         "source": source,
         "error": available.get("error"),
+    }
+
+
+@router.get("/genx/capabilities")
+async def get_genx_capabilities(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    genx_key = resolve_user_api_key(db, current_user.id, "GENX_API_KEY", settings.GENX_API_KEY)
+    configured = _configured_genx_models()
+    capabilities = _genx_capabilities_from_config()
+    return {
+        "key_saved": bool(genx_key),
+        "base_url": settings.GENX_BASE_URL,
+        "default_model": configured["effective_default_model"],
+        "capabilities": capabilities,
+        "manual_model_config_required": not all(item["configured"] for item in capabilities.values()),
     }
 
 
@@ -560,7 +606,10 @@ async def get_readiness(
 ) -> dict[str, Any]:
     genx_key, genx_source = _resolve_provider_key(db, current_user.id, "GENX_API_KEY", settings.GENX_API_KEY)
     firecrawl_key, firecrawl_source = _resolve_provider_key(db, current_user.id, "FIRECRAWL_API_KEY", settings.FIRECRAWL_API_KEY)
-    genx_configured = bool(genx_key and settings.GENX_BASE_URL and settings.GENX_DEFAULT_MODEL)
+    qwen_key, qwen_source = _resolve_provider_key(db, current_user.id, "QWEN_API_KEY", settings.QWEN_API_KEY)
+    hf_token, hf_source = _resolve_provider_key(db, current_user.id, "HUGGINGFACE_TOKEN", settings.HUGGINGFACE_TOKEN)
+    genx_models = _configured_genx_models()
+    genx_configured = bool(genx_key and settings.GENX_BASE_URL and genx_models["effective_default_model"])
     firecrawl_configured = bool(firecrawl_key)
 
     genx_health = {"ok": False, "error": "GenX is not configured"}
@@ -607,18 +656,35 @@ async def get_readiness(
         "reddit": _provider_state(_is_oauth_configured(settings.REDDIT_CLIENT_ID, settings.REDDIT_CLIENT_SECRET)),
     }
 
+    genx_model_invalid = genx_configured and (not bool(genx_health.get("ok")))
     provider_details = {
         "genx": {
             "required": True,
             "source": genx_source,
-            "status": _test_state(genx_configured, ok=bool(genx_health.get("ok")) if genx_configured else None),
-            "message": None if bool(genx_health.get("ok")) else ("GenX check failed." if genx_configured else "GenX is not configured."),
+            "status": "model_invalid" if genx_model_invalid else _test_state(genx_configured, ok=bool(genx_health.get("ok")) if genx_configured else None),
+            "message": (
+                _actionable_error_message(genx_health.get("error"), "Configured GenX model is invalid.")
+                if genx_model_invalid else
+                (None if bool(genx_health.get("ok")) else ("GenX check failed." if genx_configured else "GenX is not configured."))
+            ),
         },
         "firecrawl": {
             "required": True,
             "source": firecrawl_source,
             "status": _test_state(firecrawl_configured, ok=bool(firecrawl_probe.get("ok")) if firecrawl_configured else None),
             "message": None if bool(firecrawl_probe.get("ok")) else ("Firecrawl check failed." if firecrawl_configured else "Firecrawl is not configured."),
+        },
+        "qwen": {
+            "required": False,
+            "source": qwen_source,
+            "status": "fallback_available" if bool(qwen_key) else "missing",
+            "message": "Qwen fallback available." if bool(qwen_key) else "Qwen key missing.",
+        },
+        "huggingface": {
+            "required": False,
+            "source": hf_source,
+            "status": "configured" if bool(hf_token) else "missing_token",
+            "message": "Token saved." if bool(hf_token) else "Missing token / add token to unlock HF tasks.",
         },
     }
     providers = {name: detail["status"] for name, detail in provider_details.items()}
@@ -637,7 +703,9 @@ async def get_readiness(
     generation_readiness = {
         "genx": provider_details["genx"]["status"],
         "firecrawl": provider_details["firecrawl"]["status"],
-        "fallback": "configured",
+        "qwen": provider_details["qwen"]["status"],
+        "huggingface": provider_details["huggingface"]["status"],
+        "fallback": "configured" if bool(qwen_key or hf_token) else "missing",
         "can_generate_beta": True,
     }
     scraping_readiness = {
@@ -658,6 +726,8 @@ async def get_readiness(
     checklist = [
         {"key": "genx", "label": "GenX AI provider", "status": provider_details["genx"]["status"], "required": False},
         {"key": "firecrawl", "label": "Firecrawl scraper", "status": provider_details["firecrawl"]["status"], "required": False},
+        {"key": "qwen", "label": "Qwen fallback", "status": provider_details["qwen"]["status"], "required": False},
+        {"key": "huggingface", "label": "HuggingFace tasks", "status": provider_details["huggingface"]["status"], "required": False},
         {"key": "database", "label": "Database health", "status": providers["database"], "required": True},
     ]
 
@@ -669,11 +739,14 @@ async def get_readiness(
         "genx": {
             "configured": genx_configured,
             "health_ok": bool(genx_health.get("ok")),
+            "model": genx_models["effective_default_model"],
             "models_tested": bool(_GENX_LAST_TEST_STATE.get(current_user.id, {}).get("models_tested", False)),
             "required_models_ok": bool(_GENX_LAST_TEST_STATE.get(current_user.id, {}).get("required_models_ok", genx_health.get("ok"))),
             "failed_models": _GENX_LAST_TEST_STATE.get(current_user.id, {}).get("failed_models", []),
             "last_checked_at": _GENX_LAST_TEST_STATE.get(current_user.id, {}).get("checked_at"),
             "status": provider_details["genx"]["status"],
+            "degraded": provider_details["genx"]["status"] in {"model_invalid", "test_failed"},
+            "fallback_provider": "qwen" if bool(qwen_key) else ("huggingface" if bool(hf_token) else None),
         },
         "firecrawl": {
             "configured": firecrawl_configured,
@@ -716,7 +789,7 @@ async def genx_debug_test(
 ) -> dict[str, Any]:
     api_key, source = _resolve_provider_key(db, current_user.id, "GENX_API_KEY", settings.GENX_API_KEY)
     base_url = settings.GENX_BASE_URL
-    model = settings.GENX_DEFAULT_MODEL
+    model = _configured_genx_models()["effective_default_model"]
     if not api_key:
         return {
             "ok": False,
@@ -854,3 +927,59 @@ async def firecrawl_debug_test(
             "sanitized_preview": "",
             "error": _actionable_error_message(exc, "Firecrawl request failed."),
         }
+
+
+@router.get("/huggingface/tasks")
+async def list_huggingface_tasks(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    token = resolve_user_api_key(db, current_user.id, "HUGGINGFACE_TOKEN", settings.HUGGINGFACE_TOKEN)
+    router = HuggingFaceTaskRouter(token=token)
+    return router.list_tasks()
+
+
+@router.post("/huggingface/test-task")
+async def test_huggingface_task(
+    payload: HuggingFaceTaskTestRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    token = resolve_user_api_key(db, current_user.id, "HUGGINGFACE_TOKEN", settings.HUGGINGFACE_TOKEN)
+    router = HuggingFaceTaskRouter(token=token)
+    status_payload = router.task_status(payload.task, override_model=payload.model_override)
+    if status_payload.get("status") != "available":
+        return {
+            "task": status_payload.get("task"),
+            "status": status_payload.get("status"),
+            "ok": False,
+            "available": bool(status_payload.get("available")),
+            "model": status_payload.get("model"),
+            "endpoint_method": status_payload.get("endpoint_method"),
+            "http_status": 0,
+            "provider_error": None,
+        }
+    ok = False
+    http_status = 0
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(
+                f"https://api-inference.huggingface.co/models/{status_payload.get('model')}",
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                json={"inputs": "hello"},
+            )
+        http_status = response.status_code
+        ok = response.status_code < 400
+    except Exception:
+        ok = False
+        http_status = 0
+    return {
+        "task": status_payload.get("task"),
+        "status": "available" if ok else "provider_error",
+        "ok": ok,
+        "available": True,
+        "model": status_payload.get("model"),
+        "endpoint_method": status_payload.get("endpoint_method"),
+        "http_status": http_status,
+        "provider_error": None if ok else "Hugging Face provider request failed.",
+    }
