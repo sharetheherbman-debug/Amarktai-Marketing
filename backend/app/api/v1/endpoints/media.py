@@ -227,8 +227,10 @@ async def pixabay_photos(
     client = _pixabay_client(db, current_user)
     query = (q or "business marketing").strip()
     data = await client.search_images(q=query, category=category, image_type="photo", page=page, per_page=per_page, safesearch="true")
-    items = [normalize_pixabay_image(item, query=query, category=category, platform=platform) for item in data.get("items", [])]
-    return {"status": data.get("status", "ok"), "query": query, "count": len(items), "items": items}
+    rows = data.get("items") if isinstance(data.get("items"), list) else []
+    items = [normalize_pixabay_image(item, query=query, category=category, platform=platform) for item in rows if isinstance(item, dict)]
+    sanitized_items = [{k: v for k, v in item.items() if k != "raw_metadata"} for item in items]
+    return {"status": "ok", "query": query, "count": len(sanitized_items), "items": sanitized_items}
 
 
 @router.get("/pixabay/illustrations")
@@ -244,8 +246,10 @@ async def pixabay_illustrations(
     client = _pixabay_client(db, current_user)
     query = (q or "business marketing").strip()
     data = await client.search_images(q=query, category=category, image_type="illustration", page=page, per_page=per_page, safesearch="true")
-    items = [normalize_pixabay_image(item, query=query, category=category, platform=platform) for item in data.get("items", [])]
-    return {"status": data.get("status", "ok"), "query": query, "count": len(items), "items": items}
+    rows = data.get("items") if isinstance(data.get("items"), list) else []
+    items = [normalize_pixabay_image(item, query=query, category=category, platform=platform) for item in rows if isinstance(item, dict)]
+    sanitized_items = [{k: v for k, v in item.items() if k != "raw_metadata"} for item in items]
+    return {"status": "ok", "query": query, "count": len(sanitized_items), "items": sanitized_items}
 
 
 @router.get("/pixabay/vectors")
@@ -261,8 +265,10 @@ async def pixabay_vectors(
     client = _pixabay_client(db, current_user)
     query = (q or "business marketing").strip()
     data = await client.search_images(q=query, category=category, image_type="vector", page=page, per_page=per_page, safesearch="true")
-    items = [normalize_pixabay_image(item, query=query, category=category, platform=platform) for item in data.get("items", [])]
-    return {"status": data.get("status", "ok"), "query": query, "count": len(items), "items": items}
+    rows = data.get("items") if isinstance(data.get("items"), list) else []
+    items = [normalize_pixabay_image(item, query=query, category=category, platform=platform) for item in rows if isinstance(item, dict)]
+    sanitized_items = [{k: v for k, v in item.items() if k != "raw_metadata"} for item in items]
+    return {"status": "ok", "query": query, "count": len(sanitized_items), "items": sanitized_items}
 
 
 @router.get("/pixabay/videos")
@@ -278,8 +284,10 @@ async def pixabay_videos(
     client = _pixabay_client(db, current_user)
     query = (q or "business marketing").strip()
     data = await client.search_videos(q=query, category=category, page=page, per_page=per_page, safesearch="true")
-    items = [normalize_pixabay_video(item, query=query, category=category, platform=platform) for item in data.get("items", [])]
-    return {"status": data.get("status", "ok"), "query": query, "count": len(items), "items": items}
+    rows = data.get("items") if isinstance(data.get("items"), list) else []
+    items = [normalize_pixabay_video(item, query=query, category=category, platform=platform) for item in rows if isinstance(item, dict)]
+    sanitized_items = [{k: v for k, v in item.items() if k != "raw_metadata"} for item in items]
+    return {"status": "ok", "query": query, "count": len(sanitized_items), "items": sanitized_items}
 
 
 @router.get("/pixabay/music")

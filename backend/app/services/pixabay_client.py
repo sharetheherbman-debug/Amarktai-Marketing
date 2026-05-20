@@ -32,8 +32,8 @@ class PixabayClient:
             payload = response.json()
             items = payload.get("hits") if isinstance(payload, dict) else []
             return {"ok": True, "status": "test_passed", "error": None, "items": items or [], "total": payload.get("totalHits", 0)}
-        except Exception as exc:
-            return {"ok": False, "status": "endpoint_unreachable", "error": str(exc), "items": []}
+        except Exception:
+            return {"ok": False, "status": "endpoint_unreachable", "error": "Pixabay request failed.", "items": []}
 
     async def search_images(self, **params: Any) -> dict[str, Any]:
         return await self._get("https://pixabay.com/api/", params)

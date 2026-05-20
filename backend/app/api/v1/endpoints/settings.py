@@ -570,7 +570,7 @@ async def test_api_key(
                 "ok": ok,
                 "status": "scrape_passed" if ok else _classify_provider_error(str(result.get("error") or "")),
                 "effective_source": source if not payload.key_value else "provided",
-                "error": None if ok else _actionable_error_message(result.get("error"), "Firecrawl provider test failed."),
+                "error": None if ok else "Firecrawl provider test failed.",
                 "checked_at": recorded["checked_at"],
             }
 
@@ -763,7 +763,7 @@ async def firecrawl_test(
     return {
         "ok": ok,
         "status": status_value,
-        "error": result.get("error"),
+        "error": None if ok else ("Firecrawl scrape test failed." if status_value != "no_test_url" else "Add a business URL to test Firecrawl."),
         "checked_at": recorded["checked_at"],
         "test_url": test_url,
     }
@@ -809,7 +809,8 @@ async def pixabay_test(
         if not ok:
             error = f"Image HTTP {image_resp.status_code}, video HTTP {video_resp.status_code}"
     except Exception as exc:
-        error = _actionable_error_message(exc, "Pixabay request failed.")
+        logger.warning("Pixabay test failed for user %s: %s", current_user.id, type(exc).__name__)
+        error = "Pixabay request failed."
     return {
         "ok": ok,
         "effective_source": source if not payload.key_value else "provided",
