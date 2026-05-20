@@ -15,7 +15,9 @@ This is the production deployment path for `sharetheherbman-debug/Amarktai-Marke
 
 ```bash
 cd /var/www/amarktai-marketing/repo
-git pull --ff-only
+./scripts/fix_vps_runtime_permissions.sh
+git fetch origin
+git reset --hard origin/main
 ```
 
 ## 2) Backend environment and dependencies

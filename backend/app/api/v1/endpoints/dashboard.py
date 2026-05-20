@@ -207,44 +207,40 @@ async def get_scheduler_heatmap(
     current_user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
     """
-    Return a 24-hour audience activity heatmap with optimal posting slots.
-    Uses the SmartScheduler service when historical data is available,
-    otherwise returns platform-typical patterns.
+    Return a 24-hour scheduling distribution based on real scheduled content.
+    No synthetic scores are generated; empty workspaces return zeroed slots.
     """
-    from app.services.smart_scheduler import SmartScheduler
-
-    scheduler = SmartScheduler()
-
-    # Build time slots from the scheduler service
-    time_slots = []
-    optimal_times = scheduler.get_optimal_posting_times(
-        platform if platform != "all" else "instagram"
+    query = db.query(Content).filter(
+        Content.user_id == current_user.id,
+        Content.status == ContentStatus.SCHEDULED,
+        Content.scheduled_for != None,  # noqa: E711
     )
+    if platform != "all":
+        query = query.filter(Content.platform == platform)
+    rows = query.all()
 
-    # Build a full 24-hour map
-    import math
+    hour_counts = {hour: 0 for hour in range(24)}
+    for row in rows:
+        if row.scheduled_for:
+            hour_counts[int(row.scheduled_for.hour)] += 1
+
+    max_count = max(hour_counts.values()) if hour_counts else 0
+    time_slots = []
     for hour in range(24):
-        # Sine-wave model for typical audience activity:
-        #   offset -6  → trough at 6 AM, peak at ~18:00 (6 PM)
-        #   amplitude 35, midline 55 → range ≈ 20–90
-        base = math.sin((hour - 6) * math.pi / 12) * 35 + 55
-        score = max(20, min(95, round(base)))
-
-        # Boost hours that the service recommends
-        for slot in optimal_times:
-            h, _ = map(int, slot.time.split(":"))
-            if h == hour:
-                score = max(score, round(slot.score * 100))
-
+        count = hour_counts.get(hour, 0)
+        score = int(round((count / max_count) * 100)) if max_count > 0 else 0
         time_slots.append({
             "hour": hour,
             "score": score,
-            "audience_count": max(500, int(score * 50)),
-            "engagement": round(score / 12, 1),
+            "audience_count": count,
+            "engagement": 0,
         })
 
-    # Best 3 slots
-    best = sorted(time_slots, key=lambda s: s["score"], reverse=True)[:3]
+    best = sorted(
+        [slot for slot in time_slots if slot["audience_count"] > 0],
+        key=lambda s: (s["audience_count"], s["score"]),
+        reverse=True,
+    )[:3]
 
     return {
         "time_slots": time_slots,

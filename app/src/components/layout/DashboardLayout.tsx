@@ -88,7 +88,7 @@ function Sidebar({
           </div>
           <div>
             <p className="text-sm font-semibold text-white">AmarktAI Marketing</p>
-            <p className="text-xs text-slate-400">Beta command center</p>
+            <p className="text-xs text-slate-400">Command center</p>
           </div>
         </Link>
         {isOpen ? (
@@ -118,7 +118,7 @@ function Sidebar({
       <div className="border-t border-[#1E2130] p-4">
         <div className="rounded-xl border border-white/10 bg-white/5 p-3">
           <p className="truncate text-sm font-medium text-white">{userLabel}</p>
-          <p className="mt-1 text-xs text-slate-400">Beta flow repair mode</p>
+          <p className="mt-1 text-xs text-slate-400">Workspace</p>
         </div>
       </div>
     </aside>
@@ -186,7 +186,7 @@ export default function DashboardLayout() {
             </button>
             <div>
               <h1 className="text-base font-semibold text-white sm:text-lg">{pageTitle}</h1>
-              <p className="hidden text-xs text-slate-400 sm:block">Business-first beta flow</p>
+              <p className="hidden text-xs text-slate-400 sm:block">Business-first workflow</p>
             </div>
           </div>
 

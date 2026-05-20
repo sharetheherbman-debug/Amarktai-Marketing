@@ -19,6 +19,7 @@ from app.models.user import User
 from app.core.config import settings
 from app.services.provider_catalog import USER_PROVIDER_KEY_NAMES
 from app.services.platform_catalog import launch_platforms
+from app.services.posting_readiness import platform_posting_state
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -38,13 +39,19 @@ class APIKeyResponse(BaseModel):
         from_attributes = True
 
 class IntegrationStatus(BaseModel):
-    platform: str
-    is_connected: bool
-    connected_at: datetime = None
-    platform_username: str = None
-    auto_post_enabled: bool = False
-    auto_reply_enabled: bool = False
-    low_risk_auto_reply: bool = False
+    id: str
+    label: str
+    content_generation_available: bool
+    oauth_supported: bool
+    oauth_configured: bool
+    user_connected: bool
+    token_valid: bool
+    scopes_ok: bool
+    posting_supported: bool
+    can_post_now: bool
+    missing: list[str]
+    status_label: str
+    user_message: str
 
 class IntegrationUpdate(BaseModel):
     auto_post_enabled: bool = None
@@ -134,36 +141,79 @@ async def delete_api_key(
     return {"message": "API key deleted successfully"}
 
 # Platform Integrations Endpoints
+_PLATFORM_LABELS = {
+    "instagram": "Instagram",
+    "facebook": "Facebook",
+    "linkedin": "LinkedIn",
+    "twitter": "X / Twitter",
+    "tiktok": "TikTok",
+    "youtube": "YouTube",
+    "reddit": "Reddit",
+    "pinterest": "Pinterest",
+}
+
+
 @router.get("/platforms", response_model=List[IntegrationStatus])
 async def get_integrations(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Get status of all platform integrations."""
+    """Get launch platform readiness with safe, non-failing output."""
     platforms = launch_platforms()
-    integrations = []
-    try:
-        integrations = db.query(UserIntegration).filter(
-            UserIntegration.user_id == current_user.id
-        ).all()
-    except Exception as exc:
-        logger.warning("Integrations query failed for user %s: %s", current_user.id, str(exc)[:300])
-    
-    integration_map = {i.platform: i for i in integrations}
-    
-    result = []
+    result: list[dict[str, Any]] = []
     for platform in platforms:
-        integration = integration_map.get(platform)
+        try:
+            state = platform_posting_state(db, current_user.id, platform)
+        except Exception as exc:
+            logger.warning("Platform readiness failed for user %s platform %s: %s", current_user.id, platform, str(exc)[:300])
+            state = {
+                "oauth_configured": False,
+                "user_connected": False,
+                "token_valid": False,
+                "scopes_ok": False,
+                "posting_supported": False,
+                "can_post_now": False,
+                "missing": ["oauth_config"],
+            }
+
+        oauth_supported = True
+        oauth_configured = bool(state.get("oauth_configured", False))
+        posting_supported = bool(state.get("posting_supported", False))
+        can_post_now = bool(state.get("can_post_now", False))
+        missing = list(state.get("missing", [])) if isinstance(state.get("missing", []), list) else []
+
+        if not oauth_configured:
+            status_label = "OAuth app not configured"
+            user_message = "Content generation is available. Configure the OAuth app before connecting for posting."
+        elif not posting_supported:
+            status_label = "Generation only"
+            user_message = "Posting is not implemented yet for this platform."
+        elif can_post_now:
+            status_label = "Ready to post"
+            user_message = "OAuth and posting requirements are configured."
+        elif not bool(state.get("user_connected", False)):
+            status_label = "Posting not configured"
+            user_message = "Content generation is available. Connect OAuth to enable posting."
+        else:
+            status_label = "Limited mode"
+            user_message = "Content generation is available. Complete posting requirements to publish."
+
         result.append({
-            "platform": platform,
-            "is_connected": integration.is_connected if integration else False,
-            "connected_at": integration.connected_at if integration else None,
-            "platform_username": integration.platform_username if integration else None,
-            "auto_post_enabled": integration.auto_post_enabled if integration else False,
-            "auto_reply_enabled": integration.auto_reply_enabled if integration else False,
-            "low_risk_auto_reply": integration.low_risk_auto_reply if integration else False
+            "id": platform,
+            "label": _PLATFORM_LABELS.get(platform, platform.title()),
+            "content_generation_available": True,
+            "oauth_supported": oauth_supported,
+            "oauth_configured": oauth_configured,
+            "user_connected": bool(state.get("user_connected", False)),
+            "token_valid": bool(state.get("token_valid", False)),
+            "scopes_ok": bool(state.get("scopes_ok", False)),
+            "posting_supported": posting_supported,
+            "can_post_now": can_post_now,
+            "missing": missing,
+            "status_label": status_label,
+            "user_message": user_message,
         })
-    
+
     return result
 
 @router.get("/platforms/{platform}/connect")

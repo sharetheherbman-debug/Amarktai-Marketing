@@ -11,24 +11,28 @@ if [[ ! -d "$REPO_ROOT" ]]; then
 fi
 
 echo "Fixing ownership (admin:www-data) for $REPO_ROOT"
-chown -R admin:www-data "$REPO_ROOT"
+sudo chown -R admin:www-data "$REPO_ROOT"
 
 echo "Applying safe file/dir permissions"
-find "$REPO_ROOT" -type d -exec chmod 750 {} \;
-find "$REPO_ROOT" -type f -exec chmod 640 {} \;
+sudo chmod -R u+rwX,g+rX "$REPO_ROOT"
 
 if [[ -d "$APP_DIR/node_modules/.bin" ]]; then
   echo "Ensuring frontend build tools are executable"
-  chmod +x "$APP_DIR"/node_modules/.bin/* || true
+  sudo chmod +x "$APP_DIR"/node_modules/.bin/* || true
+fi
+
+if ls "$REPO_ROOT"/scripts/*.sh >/dev/null 2>&1; then
+  echo "Ensuring script files are executable"
+  sudo chmod +x "$REPO_ROOT"/scripts/*.sh || true
 fi
 
 echo "Removing backend __pycache__ folders"
-find "$BACKEND_DIR/app" -type d -name "__pycache__" -prune -exec rm -rf {} +
+find "$BACKEND_DIR/app" -type d -name "__pycache__" -prune -exec sudo rm -rf {} +
 
 if [[ -f "$BACKEND_DIR/.env" ]]; then
   echo "Securing backend/.env"
-  chown admin:www-data "$BACKEND_DIR/.env"
-  chmod 640 "$BACKEND_DIR/.env"
+  sudo chown admin:www-data "$BACKEND_DIR/.env"
+  sudo chmod 640 "$BACKEND_DIR/.env"
 fi
 
 echo "Permission fix completed."

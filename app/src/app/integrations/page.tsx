@@ -37,15 +37,33 @@ interface APIKeysResponse {
 }
 
 interface PlatformIntegration {
-  platform: string;
-  is_connected: boolean;
-  connected_at: string | null;
-  platform_username: string | null;
+  id: string;
+  label: string;
+  content_generation_available: boolean;
+  oauth_supported: boolean;
+  oauth_configured: boolean;
+  user_connected: boolean;
+  token_valid: boolean;
+  scopes_ok: boolean;
+  posting_supported: boolean;
+  can_post_now: boolean;
+  missing: string[];
+  status_label: string;
+  user_message: string;
 }
 
 interface ProviderDebugResult {
+  ok?: boolean;
+  status?: string;
+  effective_source?: string;
   sanitized_preview?: string;
+  endpoint?: string;
+  base_url?: string;
+  model?: string;
+  http_status?: number;
+  response_shape_keys?: string[];
   error?: string | null;
+  [key: string]: unknown;
 }
 
 const requiredProviders = [
@@ -91,6 +109,7 @@ export default function IntegrationsPage() {
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [testingKey, setTestingKey] = useState<string | null>(null);
   const [providerDebug, setProviderDebug] = useState<Record<string, ProviderDebugResult>>({});
+  const [providerTests, setProviderTests] = useState<Record<string, ProviderDebugResult>>({});
 
   const load = async () => {
     try {
@@ -151,6 +170,7 @@ export default function IntegrationsPage() {
         body: JSON.stringify({ key_name: keyName, key_value: (drafts[keyName] || '').trim() || undefined }),
       });
       const data = await res.json();
+      setProviderTests((current) => ({ ...current, [keyName]: data as ProviderDebugResult }));
       if (!res.ok || !data.ok) throw new Error(data.error || 'Test failed');
       toast.success('Provider test passed');
       await load();
@@ -345,9 +365,15 @@ export default function IntegrationsPage() {
         <CardContent className="grid gap-4 xl:grid-cols-2">
           {socialPlatforms.map((platform) => {
             const Icon = platform.icon;
-            const integration = integrations.find((item) => item.platform === platform.id);
+            const integration = integrations.find((item) => item.id === platform.id);
             const state = socialReadiness[platform.id] || {};
-            const missing = (state.missing as string[] | undefined) ?? [];
+            const missing = integration?.missing ?? ((state.missing as string[] | undefined) ?? []);
+            const canConnect = Boolean(integration?.oauth_supported && integration?.oauth_configured && integration?.posting_supported);
+            const connectLabel = !integration?.oauth_configured
+              ? 'Configure OAuth app first'
+              : !integration?.posting_supported
+                ? 'Posting not implemented'
+                : 'Connect OAuth';
             return (
               <div key={platform.id} className="rounded-2xl border border-[#252A3A] bg-[#141720] p-4">
                 <div className="flex items-start justify-between gap-4">
@@ -358,14 +384,14 @@ export default function IntegrationsPage() {
                       <p className="text-xs text-slate-400">Content generation available</p>
                     </div>
                   </div>
-                  <Badge className={Boolean(state.can_post_now) ? 'border border-emerald-500/30 bg-emerald-500/15 text-emerald-300' : 'border border-amber-500/30 bg-amber-500/15 text-amber-300'}>
-                    {Boolean(state.can_post_now) ? 'ready to post' : (String(state.ui_status || 'posting not configured').toLowerCase())}
+                  <Badge className={integration?.can_post_now ? 'border border-emerald-500/30 bg-emerald-500/15 text-emerald-300' : 'border border-amber-500/30 bg-amber-500/15 text-amber-300'}>
+                    {integration?.status_label || String(state.ui_status || 'Limited mode')}
                   </Badge>
                 </div>
                 <div className="mt-4 rounded-xl border border-[#252A3A] bg-[#0D0F14] p-3 text-sm text-slate-300">
-                  <p>Posting: {integration?.is_connected ? 'OAuth configured' : 'Posting not configured'}</p>
+                  <p>Posting: {integration?.user_connected ? 'OAuth connected' : 'Posting not configured'}</p>
                   <p className="mt-1 text-xs text-slate-400">
-                    {integration?.platform_username ? `Connected as ${integration.platform_username}` : 'OAuth connection required only when you want to post.'}
+                    {integration?.user_message || 'OAuth connection required only when you want to post.'}
                   </p>
                 </div>
                 {missing.length > 0 ? (
@@ -375,7 +401,35 @@ export default function IntegrationsPage() {
                   </div>
                 ) : null}
                 <div className="mt-4 flex gap-3">
-                  <Button onClick={() => connectPlatform(platform.id)} className="bg-blue-600 hover:bg-blue-500">Connect OAuth</Button>
+                  <Button
+                    onClick={() => connectPlatform(platform.id)}
+                    disabled={!canConnect}
+                    className={canConnect ? 'bg-blue-600 hover:bg-blue-500' : 'bg-slate-700 text-slate-300 hover:bg-slate-700'}
+                  >
+                    {connectLabel}
+                  </Button>
+                </div>
+              </div>
+            );
+          })}
+        </CardContent>
+      </Card>
+
+      <Card className="border-[#252A3A] bg-[#0D0F14]">
+        <CardHeader>
+          <CardTitle className="text-white">Last provider test results</CardTitle>
+          <CardDescription>Save, test, and debug results are shown here with actionable details.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4 xl:grid-cols-2">
+          {requiredProviders.map((provider) => {
+            const testResult = providerTests[provider.key];
+            const debugResult = providerDebug[provider.key];
+            return (
+              <div key={`result-${provider.key}`} className="rounded-2xl border border-[#252A3A] bg-[#141720] p-4">
+                <p className="font-medium text-white">{provider.label}</p>
+                <div className="mt-3 space-y-2 text-xs text-slate-300">
+                  <p><span className="text-slate-400">Test:</span> {testResult ? JSON.stringify(testResult) : 'No test run yet.'}</p>
+                  <p><span className="text-slate-400">Debug:</span> {debugResult ? JSON.stringify(debugResult) : 'No debug run yet.'}</p>
                 </div>
               </div>
             );

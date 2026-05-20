@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
+import json
+import logging
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Response, UploadFile, status
 from pydantic import BaseModel
@@ -18,6 +20,7 @@ from app.services.provider_catalog import resolve_user_api_key
 from app.core.config import settings
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -30,11 +33,9 @@ async def _run_scrape(webapp_id: str) -> None:
     Uses Firecrawl as the primary scraping provider when FIRECRAWL_API_KEY is
     configured; falls back to httpx + BeautifulSoup automatically.
     """
-    import logging
     from app.db.base import SessionLocal
     from app.services.business_intelligence import analyze_business
 
-    _logger = logging.getLogger(__name__)
     db = SessionLocal()
     try:
         webapp = db.query(WebAppModel).filter(WebAppModel.id == webapp_id).first()
@@ -59,42 +60,177 @@ async def _run_scrape(webapp_id: str) -> None:
         }
         db.commit()
     except Exception as exc:
-        _logger.warning(
+        logger.warning(
             "Background scrape failed for webapp %s: %s", webapp_id, exc
         )
     finally:
         db.close()
 
 
+def _sanitize_message(value: Any) -> str:
+    return str(value).replace("\n", " ").strip()[:300]
+
+
+def _log_route_exception(route: str, user_id: str | None, exc: Exception) -> None:
+    logger.exception(
+        "webapps route=%s user_id=%s exc=%s message=%s",
+        route,
+        user_id or "unknown",
+        type(exc).__name__,
+        _sanitize_message(exc),
+    )
+
+
+def _parse_json_string(value: str) -> Any:
+    try:
+        return json.loads(value)
+    except Exception:
+        return value
+
+
+def _normalize_string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(v).strip() for v in value if str(v).strip()]
+    if isinstance(value, str):
+        parsed = _parse_json_string(value.strip())
+        if isinstance(parsed, list):
+            return [str(v).strip() for v in parsed if str(v).strip()]
+        if isinstance(parsed, str):
+            tokenized = [v.strip() for v in parsed.replace("\n", ",").split(",") if v.strip()]
+            return tokenized if tokenized else [parsed]
+    if isinstance(value, (tuple, set)):
+        return [str(v).strip() for v in value if str(v).strip()]
+    return [str(value).strip()] if str(value).strip() else []
+
+
+def _normalize_dict(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        parsed = _parse_json_string(value.strip())
+        if isinstance(parsed, dict):
+            return parsed
+        if isinstance(parsed, list):
+            return {"items": parsed}
+        if parsed:
+            return {"raw": str(parsed)}
+    return {"raw": str(value)}
+
+
+def _normalize_media_assets(value: Any) -> list[dict[str, Any]]:
+    if value is None:
+        return []
+    if isinstance(value, dict):
+        return [value]
+    if isinstance(value, list):
+        assets: list[dict[str, Any]] = []
+        for item in value:
+            if isinstance(item, dict):
+                assets.append(item)
+            elif isinstance(item, str) and item.strip():
+                assets.append({"url": item.strip()})
+            elif item is not None:
+                assets.append({"value": item})
+        return assets
+    if isinstance(value, str):
+        parsed = _parse_json_string(value.strip())
+        if isinstance(parsed, dict):
+            return [parsed]
+        if isinstance(parsed, list):
+            return _normalize_media_assets(parsed)
+        if parsed:
+            return [{"url": str(parsed)}]
+    return []
+
+
+def _iso_datetime(value: Any) -> str | None:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, str) and value.strip():
+        return value
+    return None
+
+
+def serialize_webapp(model: WebAppModel) -> dict[str, Any]:
+    content_goals_value = model.content_goals
+    if isinstance(content_goals_value, list):
+        content_goals_value = ", ".join([str(v).strip() for v in content_goals_value if str(v).strip()])
+    elif isinstance(content_goals_value, str):
+        parsed_goals = _parse_json_string(content_goals_value.strip())
+        if isinstance(parsed_goals, list):
+            content_goals_value = ", ".join([str(v).strip() for v in parsed_goals if str(v).strip()])
+        else:
+            content_goals_value = content_goals_value.strip()
+    elif content_goals_value is None:
+        content_goals_value = ""
+    else:
+        content_goals_value = str(content_goals_value)
+
+    return {
+        "id": model.id,
+        "user_id": model.user_id,
+        "name": (model.name or "").strip(),
+        "url": (model.url or "").strip(),
+        "description": model.description or "",
+        "category": model.category or "",
+        "target_audience": model.target_audience or "",
+        "key_features": _normalize_string_list(model.key_features),
+        "logo": model.logo,
+        "is_active": bool(model.is_active) if model.is_active is not None else True,
+        "scraped_data": _normalize_dict(model.scraped_data),
+        "brand_voice": model.brand_voice,
+        "market_location": model.market_location,
+        "content_goals": content_goals_value,
+        "scraper_source_urls": _normalize_string_list(model.scraper_source_urls),
+        "media_assets": _normalize_media_assets(model.media_assets),
+        "created_at": _iso_datetime(model.created_at),
+        "updated_at": _iso_datetime(model.updated_at),
+    }
+
+
 # ---------------------------------------------------------------------------
 # CRUD endpoints
 # ---------------------------------------------------------------------------
 
-@router.get("/", response_model=list[WebApp])
+@router.get("/")
 async def get_webapps(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Get all web apps for the current user."""
-    webapps = db.query(WebAppModel).filter(WebAppModel.user_id == current_user.id).all()
-    return webapps
+    try:
+        webapps = db.query(WebAppModel).filter(WebAppModel.user_id == current_user.id).all()
+        return [serialize_webapp(item) for item in webapps]
+    except Exception as exc:
+        _log_route_exception("/api/v1/webapps/", current_user.id, exc)
+        raise HTTPException(status_code=500, detail="Failed to load businesses.")
 
-@router.get("/{webapp_id}", response_model=WebApp)
+@router.get("/{webapp_id}")
 async def get_webapp(
     webapp_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Get a specific web app by ID."""
-    webapp = db.query(WebAppModel).filter(
-        WebAppModel.id == webapp_id,
-        WebAppModel.user_id == current_user.id,
-    ).first()
-    if not webapp:
-        raise HTTPException(status_code=404, detail="Web app not found")
-    return webapp
+    try:
+        webapp = db.query(WebAppModel).filter(
+            WebAppModel.id == webapp_id,
+            WebAppModel.user_id == current_user.id,
+        ).first()
+        if not webapp:
+            raise HTTPException(status_code=404, detail="Web app not found")
+        return serialize_webapp(webapp)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _log_route_exception(f"/api/v1/webapps/{webapp_id}", current_user.id, exc)
+        raise HTTPException(status_code=500, detail="Failed to load business.")
 
-@router.post("/", response_model=WebApp, status_code=status.HTTP_201_CREATED)
+@router.post("/", status_code=status.HTTP_201_CREATED)
 async def create_webapp(
     webapp: WebAppCreate,
     background_tasks: BackgroundTasks,
@@ -106,83 +242,91 @@ async def create_webapp(
     Immediately queues a background scrape of the webapp URL so the AI has
     rich context before the first content generation run.
     """
-    # Admin users bypass all limits
-    if not is_admin_user(current_user):
-        existing_count = db.query(WebAppModel).filter(
-            WebAppModel.user_id == current_user.id,
-        ).count()
-        if existing_count >= MAX_BUSINESSES_PER_USER:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Maximum of {MAX_BUSINESSES_PER_USER} businesses per user reached.",
-            )
-    name = (webapp.name or "").strip()
-    normalized_url = normalize_url(webapp.url)
-    if not name and not normalized_url:
-        raise HTTPException(status_code=422, detail="Either name or url must be provided.")
+    try:
+        # Admin users bypass all limits
+        if not is_admin_user(current_user):
+            existing_count = db.query(WebAppModel).filter(
+                WebAppModel.user_id == current_user.id,
+            ).count()
+            if existing_count >= MAX_BUSINESSES_PER_USER:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Maximum of {MAX_BUSINESSES_PER_USER} businesses per user reached.",
+                )
+        name = (webapp.name or "").strip()
+        normalized_url = normalize_url(webapp.url)
+        if not name and not normalized_url:
+            raise HTTPException(status_code=422, detail="Either name or url must be provided.")
 
-    firecrawl_key = resolve_user_api_key(
-        db,
-        current_user.id,
-        "FIRECRAWL_API_KEY",
-        settings.FIRECRAWL_API_KEY,
-    )
-    intelligence: dict[str, Any] = {}
-    if normalized_url:
-        try:
-            intelligence = await analyze_business(
-                url=normalized_url,
-                name=name or None,
-                description=webapp.description,
-                firecrawl_api_key=firecrawl_key,
-                timeout=25,
-            )
-        except Exception:
-            intelligence = {
-                "source_provider": "manual",
-                "scrape_status": "failed",
-                "warnings": ["Website analysis failed; profile created from provided fields."],
-            }
+        firecrawl_key = resolve_user_api_key(
+            db,
+            current_user.id,
+            "FIRECRAWL_API_KEY",
+            settings.FIRECRAWL_API_KEY,
+        )
+        intelligence: dict[str, Any] = {}
+        if normalized_url:
+            try:
+                intelligence = await analyze_business(
+                    url=normalized_url,
+                    name=name or None,
+                    description=webapp.description,
+                    firecrawl_api_key=firecrawl_key,
+                    timeout=25,
+                )
+            except Exception as scrape_exc:
+                intelligence = {
+                    "source_provider": "manual",
+                    "scrape_status": "failed",
+                    "warnings": ["Website analysis failed; profile created from provided fields."],
+                    "error": f"{type(scrape_exc).__name__}: {_sanitize_message(scrape_exc)}",
+                }
 
-    inferred_name = (
-        intelligence.get("business_name")
-        or name
-        or "Business Profile"
-    )
-    description = (webapp.description or intelligence.get("page_summary") or "").strip()
-    category = (webapp.category or "").strip()
-    target_audience = (webapp.target_audience or intelligence.get("target_audience_guess") or "").strip()
-    key_features = [k.strip() for k in (webapp.key_features or intelligence.get("products_services") or []) if isinstance(k, str) and k.strip()][:20]
+        inferred_name = (
+            intelligence.get("business_name")
+            or name
+            or ((normalized_url or "").split("://")[-1].split("/")[0] if normalized_url else "")
+            or "Business Profile"
+        )
+        description = (webapp.description or intelligence.get("page_summary") or "").strip()
+        category = (webapp.category or "").strip()
+        target_audience = (webapp.target_audience or intelligence.get("target_audience_guess") or "").strip()
+        key_features = [k.strip() for k in (webapp.key_features or intelligence.get("products_services") or []) if isinstance(k, str) and k.strip()][:20]
 
-    db_webapp = WebAppModel(
-        id=str(uuid.uuid4()),
-        user_id=current_user.id,
-        name=inferred_name,
-        url=normalized_url or "",
-        description=description,
-        category=category,
-        target_audience=target_audience,
-        key_features=key_features,
-        logo=webapp.logo,
-        is_active=webapp.is_active if webapp.is_active is not None else True,
-        brand_voice=webapp.brand_voice,
-        market_location=webapp.market_location,
-        content_goals=webapp.content_goals,
-        scraper_source_urls=webapp.scraper_source_urls,
-        scraped_data={
-            "scraped_at": datetime.utcnow().isoformat(),
-            **intelligence,
-        } if intelligence else None,
-    )
-    db.add(db_webapp)
-    db.commit()
-    db.refresh(db_webapp)
+        db_webapp = WebAppModel(
+            id=str(uuid.uuid4()),
+            user_id=current_user.id,
+            name=inferred_name,
+            url=normalized_url or "",
+            description=description,
+            category=category,
+            target_audience=target_audience,
+            key_features=key_features,
+            logo=webapp.logo,
+            is_active=webapp.is_active if webapp.is_active is not None else True,
+            brand_voice=webapp.brand_voice,
+            market_location=webapp.market_location,
+            content_goals=webapp.content_goals,
+            scraper_source_urls=webapp.scraper_source_urls,
+            scraped_data={
+                "scraped_at": datetime.utcnow().isoformat(),
+                **intelligence,
+            } if intelligence else None,
+        )
+        db.add(db_webapp)
+        db.commit()
+        db.refresh(db_webapp)
 
-    # Keep async refresh for richer data, but never block creation.
-    if normalized_url:
-        background_tasks.add_task(_run_scrape, db_webapp.id)
+        # Keep async refresh for richer data, but never block creation.
+        if normalized_url:
+            background_tasks.add_task(_run_scrape, db_webapp.id)
 
-    return db_webapp
+        return serialize_webapp(db_webapp)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _log_route_exception("/api/v1/webapps/", current_user.id, exc)
+        raise HTTPException(status_code=500, detail="Failed to create business.")
 
 
 class AnalyzeBusinessRequest(BaseModel):
@@ -305,7 +449,7 @@ async def refresh_intelligence(
     }
 
 
-@router.put("/{webapp_id}", response_model=WebApp)
+@router.put("/{webapp_id}")
 async def update_webapp(
     webapp_id: str,
     webapp_update: WebAppUpdate,
@@ -313,20 +457,28 @@ async def update_webapp(
     current_user: User = Depends(get_current_user),
 ):
     """Update a web app."""
-    db_webapp = db.query(WebAppModel).filter(
-        WebAppModel.id == webapp_id,
-        WebAppModel.user_id == current_user.id,
-    ).first()
-    if not db_webapp:
-        raise HTTPException(status_code=404, detail="Web app not found")
+    try:
+        db_webapp = db.query(WebAppModel).filter(
+            WebAppModel.id == webapp_id,
+            WebAppModel.user_id == current_user.id,
+        ).first()
+        if not db_webapp:
+            raise HTTPException(status_code=404, detail="Web app not found")
 
-    update_data = webapp_update.model_dump(exclude_unset=True)
-    for field, value in update_data.items():
-        setattr(db_webapp, field, value)
+        update_data = webapp_update.model_dump(exclude_unset=True)
+        if "url" in update_data:
+            update_data["url"] = normalize_url(update_data.get("url")) or ""
+        for field, value in update_data.items():
+            setattr(db_webapp, field, value)
 
-    db.commit()
-    db.refresh(db_webapp)
-    return db_webapp
+        db.commit()
+        db.refresh(db_webapp)
+        return serialize_webapp(db_webapp)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _log_route_exception(f"/api/v1/webapps/{webapp_id}", current_user.id, exc)
+        raise HTTPException(status_code=500, detail="Failed to update business.")
 
 @router.delete("/{webapp_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_webapp(

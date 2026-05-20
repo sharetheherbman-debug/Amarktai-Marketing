@@ -5,6 +5,7 @@
 - [ ] Deploy target is `marketing.amarktai.com`
 - [ ] No deployment step from this repo references the Builder app domain
 - [ ] Repo path is `/var/www/amarktai-marketing/repo`
+- [ ] Run `./scripts/fix_vps_runtime_permissions.sh` before git fetch/reset on VPS
 
 ## Backend (systemd)
 
