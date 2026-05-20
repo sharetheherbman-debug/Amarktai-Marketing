@@ -172,7 +172,32 @@ async def mark_scheduler_item_failed(
     return scheduler_item_payload(item)
 
 
-@router.get("/calendar")
+@router.post("/items/{item_id}/reschedule")
+async def reschedule_item(
+    item_id: str,
+    payload: dict,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    item = _get_item_or_404(db, item_id, current_user.id)
+    new_planned_at_raw = payload.get("planned_at")
+    if not new_planned_at_raw:
+        raise HTTPException(status_code=400, detail="planned_at is required for reschedule")
+    if isinstance(new_planned_at_raw, str):
+        new_planned_at = parse_iso_datetime(new_planned_at_raw)
+    else:
+        new_planned_at = new_planned_at_raw
+    reason = payload.get("reason") or ""
+    item.planned_at = new_planned_at
+    item.status = SchedulerStatus.SCHEDULED.value
+    item.metadata_json = {**dict(item.metadata_json or {}), "reschedule_reason": reason}
+    content = _get_content_or_404(db, item.content_id, current_user.id)
+    content.scheduled_for = new_planned_at
+    db.commit()
+    db.refresh(item)
+    return scheduler_item_payload(item)
+
+
 async def scheduler_calendar(
     start: str,
     end: str,
