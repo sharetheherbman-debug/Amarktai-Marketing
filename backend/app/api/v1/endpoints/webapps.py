@@ -8,7 +8,7 @@ import re
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Response, UploadFile, status
 from pydantic import BaseModel
-from sqlalchemy import text, inspect
+from sqlalchemy import inspect, Table, MetaData, select, insert
 from sqlalchemy.orm import Session
 import uuid
 
@@ -142,6 +142,10 @@ def _get_webapps_columns(db: Session) -> set[str]:
         return {col["name"] for col in table_columns}
     except Exception:
         return set()
+
+
+def _get_webapps_table(db: Session) -> Table:
+    return Table("webapps", MetaData(), autoload_with=db.bind)
 
 
 def _parse_json_string(value: str) -> Any:
@@ -335,14 +339,12 @@ def _list_webapps_resilient(db: Session, user_id: str, route: str) -> list[dict[
     select_columns = [col for col in _WEBAPPS_REQUIRED_COLUMNS if col in available_columns]
     if not select_columns:
         return []
-    rows = db.execute(
-        text(
-            f"SELECT {', '.join(select_columns)} FROM webapps WHERE user_id = :user_id ORDER BY created_at DESC"
-            if "created_at" in select_columns
-            else f"SELECT {', '.join(select_columns)} FROM webapps WHERE user_id = :user_id"
-        ),
-        {"user_id": user_id},
-    ).mappings().all()
+    table = _get_webapps_table(db)
+    selected = [table.c[col] for col in select_columns]
+    stmt = select(*selected).where(table.c.user_id == user_id)
+    if "created_at" in select_columns:
+        stmt = stmt.order_by(table.c.created_at.desc())
+    rows = db.execute(stmt).mappings().all()
     return [_serialize_webapp_row(dict(row), route=route, user_id=user_id) for row in rows]
 
 
@@ -351,12 +353,10 @@ def _get_webapp_resilient(db: Session, user_id: str, webapp_id: str, route: str)
     select_columns = [col for col in _WEBAPPS_REQUIRED_COLUMNS if col in available_columns]
     if not select_columns:
         return None
-    row = db.execute(
-        text(
-            f"SELECT {', '.join(select_columns)} FROM webapps WHERE id = :webapp_id AND user_id = :user_id LIMIT 1"
-        ),
-        {"webapp_id": webapp_id, "user_id": user_id},
-    ).mappings().first()
+    table = _get_webapps_table(db)
+    selected = [table.c[col] for col in select_columns]
+    stmt = select(*selected).where(table.c.id == webapp_id, table.c.user_id == user_id).limit(1)
+    row = db.execute(stmt).mappings().first()
     if not row:
         return None
     return _serialize_webapp_row(dict(row), route=route, user_id=user_id)
@@ -395,10 +395,9 @@ def _create_webapp_resilient(
     insert_columns = [col for col in insert_payload if col in available_columns]
     if not insert_columns:
         raise RuntimeError("No insertable columns detected for webapps table")
-    sql = text(
-        f"INSERT INTO webapps ({', '.join(insert_columns)}) VALUES ({', '.join(f':{col}' for col in insert_columns)})"
-    )
-    db.execute(sql, {col: insert_payload[col] for col in insert_columns})
+    table = _get_webapps_table(db)
+    values = {col: insert_payload[col] for col in insert_columns}
+    db.execute(insert(table).values(**values))
     db.commit()
     inserted = _get_webapp_resilient(db, user_id=user_id, webapp_id=str(payload["id"]), route=route)
     if not inserted:
