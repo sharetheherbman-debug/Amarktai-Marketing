@@ -57,6 +57,8 @@ class GenerateCreativeRequest(BaseModel):
     objective: str | None = None
     tone: str | None = None
     audience: str | None = None
+    offer: str | None = None
+    product_focus: str | None = None
     auto_select_format: bool = True
 
 
@@ -66,6 +68,8 @@ class GeneratePackRequest(BaseModel):
     objective: str | None = None
     tone: str | None = None
     audience: str | None = None
+    offer: str | None = None
+    product_focus: str | None = None
     formats: list[str] = ["text_post", "image_prompt", "video_script", "thumbnail_prompt", "talking_avatar_script", "voiceover_script"]
     auto_select_formats: bool = True
 
@@ -78,6 +82,8 @@ class ImproveContentRequest(BaseModel):
     objective: str | None = None
     tone: str | None = None
     audience: str | None = None
+    offer: str | None = None
+    product_focus: str | None = None
 
 
 class RejectItemRequest(BaseModel):
@@ -768,6 +774,7 @@ async def improve_content_item(
         objective=payload.objective,
         tone=payload.tone,
         audience=payload.audience,
+        product_focus=payload.product_focus or payload.offer or None,
         db=db,
         current_user=current_user,
     )
@@ -893,6 +900,7 @@ async def generate_content(
     tone: str | None = None,
     campaign_type: str | None = None,
     product_focus: str | None = None,
+    offer: str | None = None,
     audience: str | None = None,
     include_hashtags: bool = True,
     include_cta: bool = True,
@@ -949,8 +957,9 @@ async def generate_content(
         "brand_voice": getattr(webapp, "brand_voice", "") or "",
         "social_links": intelligence.get("social_links") or [],
     }
-    if product_focus:
-        webapp_data["products_services"] = [product_focus, *list(webapp_data.get("products_services") or [])][:5]
+    effective_product_focus = product_focus or offer or None
+    if effective_product_focus:
+        webapp_data["products_services"] = [effective_product_focus, *list(webapp_data.get("products_services") or [])][:5]
     if campaign_type:
         webapp_data["campaign_type"] = campaign_type
     if objective:
@@ -1175,6 +1184,7 @@ async def generate_creative(
     genx_key = _get_genx_key(db, current_user)
     strategy = select_formats(payload.platform, requested_format=payload.format, auto_select=payload.auto_select_format)
     selected_format = strategy["formats"][0]
+    effective_product_focus = payload.product_focus or payload.offer or None
     webapp_data = {
         "name": webapp.name or "",
         "description": webapp.description or "",
@@ -1187,6 +1197,8 @@ async def generate_creative(
         "market_location": getattr(webapp, "market_location", "") or "",
         "brand_voice": getattr(webapp, "brand_voice", "") or "",
     }
+    if effective_product_focus:
+        webapp_data["products_services"] = [effective_product_focus, *list(webapp_data.get("products_services") or [])][:5]
     source_business_snapshot = {
         "id": webapp.id,
         "name": webapp.name or "",
@@ -1399,6 +1411,8 @@ async def generate_pack(
                     objective=payload.objective,
                     tone=payload.tone,
                     audience=payload.audience,
+                    offer=payload.offer,
+                    product_focus=payload.product_focus,
                     auto_select_format=payload.auto_select_formats,
                 ),
                 db=db,

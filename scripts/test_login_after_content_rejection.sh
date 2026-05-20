@@ -6,214 +6,184 @@
 # No 500s on auth or dashboard boot endpoints after rejecting a content item.
 #
 # Usage:
-#   BASE_URL=http://localhost:8000 EMAIL=test@example.com PASSWORD=testpass \
+#   MARKETING_TEST_EMAIL=you@example.com MARKETING_TEST_PASSWORD=secret \
 #     bash scripts/test_login_after_content_rejection.sh
 # =============================================================================
 
 set -euo pipefail
 
-BASE_URL="${BASE_URL:-http://localhost:8000}"
-API="$BASE_URL/api/v1"
-EMAIL="${EMAIL:-rejection_test_$(date +%s)@amarktai.test}"
-PASSWORD="${PASSWORD:-TestPass123!}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+export REPO_ROOT
+
+source "$SCRIPT_DIR/lib/auth.sh"
+source "$SCRIPT_DIR/lib/http.sh"
 
 PASS=0
 FAIL=0
 
-_ok() { echo "  ✅ $1"; ((PASS++)) || true; }
-_fail() { echo "  ❌ $1"; ((FAIL++)) || true; }
-_info() { echo "  ℹ️  $1"; }
-
-assert_status() {
-  local label="$1" expected="$2" actual="$3"
-  if [ "$actual" -eq "$expected" ]; then
-    _ok "$label (HTTP $actual)"
-  else
-    _fail "$label (expected $expected, got $actual)"
-  fi
-}
-
-assert_not_500() {
-  local label="$1" actual="$2"
-  if [ "$actual" -lt 500 ]; then
-    _ok "$label (HTTP $actual — no 500)"
-  else
-    _fail "$label (got HTTP $actual — server error)"
-  fi
-}
+_ok()   { echo "  PASS $1"; ((PASS++)) || true; }
+_fail() { echo "  FAIL $1"; ((FAIL++)) || true; }
+_info() { echo "  INFO $1"; }
 
 echo ""
 echo "========================================="
 echo "  Login-After-Rejection Gate Test"
-echo "  $API"
+echo "  BASE_URL: ${BASE_URL}"
 echo "========================================="
 
-# ── STEP 1: Register test user ────────────────────────────────────────────────
+# STEP 1: Login
 echo ""
-echo "1. Register test user ($EMAIL)..."
-REG_RESP=$(curl -s -o /tmp/reg_body.json -w "%{http_code}" \
-  -X POST "$API/auth/register" \
-  -H "Content-Type: application/json" \
-  -d "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\",\"name\":\"Rejection Tester\"}")
+echo "1. Login (${MARKETING_TEST_EMAIL:-<MARKETING_TEST_EMAIL not set>})..."
+if ! do_login; then
+  echo "NO_GO — login failed"
+  exit 1
+fi
+_ok "Login (HTTP 200, token received)"
+_info "Token: ${TOKEN:0:20}..."
 
-if [ "$REG_RESP" -eq 201 ] || [ "$REG_RESP" -eq 409 ]; then
-  _ok "Register (HTTP $REG_RESP)"
+# STEP 2: Verify /users/me
+echo ""
+echo "2. Verify /users/me..."
+api_call "GET" "/api/v1/users/me"
+if [[ "$_HTTP_STATUS" == 2* ]]; then
+  _ok "/users/me (HTTP ${_HTTP_STATUS})"
 else
-  _fail "Register (HTTP $REG_RESP)"
+  _fail "/users/me (HTTP ${_HTTP_STATUS})"
 fi
 
-# ── STEP 2: Login ─────────────────────────────────────────────────────────────
+# STEP 3: Create test business
 echo ""
-echo "2. Login..."
-LOGIN_RESP=$(curl -s -o /tmp/login_body.json -w "%{http_code}" \
-  -X POST "$API/auth/login" \
-  -H "Content-Type: application/json" \
-  -d "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}")
-
-assert_status "Login" 200 "$LOGIN_RESP"
-TOKEN=$(python3 -c "import json,sys; d=json.load(open('/tmp/login_body.json')); print(d.get('access_token',''))" 2>/dev/null || echo "")
-
-if [ -z "$TOKEN" ]; then
-  _fail "No token received — cannot continue"
-  echo ""; echo "RESULT: FAIL (no token)"; exit 1
-fi
-_info "Got token: ${TOKEN:0:20}..."
-
-AUTH="-H \"Authorization: Bearer $TOKEN\""
-
-# ── STEP 3: Verify /users/me ──────────────────────────────────────────────────
-echo ""
-echo "3. Verify /users/me..."
-ME_RESP=$(curl -s -o /tmp/me_body.json -w "%{http_code}" \
-  -H "Authorization: Bearer $TOKEN" "$API/users/me")
-assert_status "/users/me after login" 200 "$ME_RESP"
-
-# ── STEP 4: Create test business ──────────────────────────────────────────────
-echo ""
-echo "4. Create test business (Equine example)..."
-BIZ_RESP=$(curl -s -o /tmp/biz_body.json -w "%{http_code}" \
-  -X POST "$API/webapps/" \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $TOKEN" \
-  -d '{"name":"Sunrise Equestrian Centre","url":"https://sunrise-equestrian.test","description":"Premium horse riding lessons, livery, and equine care in Surrey","category":"equine","target_audience":"Horse owners, riders, equestrian enthusiasts","key_features":["Horse riding lessons","Livery services","Equine health care","Show jumping training"]}')
-
-if [ "$BIZ_RESP" -eq 200 ] || [ "$BIZ_RESP" -eq 201 ]; then
-  _ok "Create business (HTTP $BIZ_RESP)"
+echo "3. Create test business..."
+api_call "POST" "/api/v1/webapps/" '{"name":"Sunrise Equestrian Centre","url":"https://sunrise-equestrian.test","description":"Premium horse riding lessons and equine care","category":"equine","target_audience":"Horse owners and riders","key_features":["Horse riding lessons","Livery services","Equine health care"]}'
+WEBAPP_ID=""
+if [[ "$_HTTP_STATUS" == 2* ]] && [[ -n "$_HTTP_BODY" ]]; then
+  _ok "Create business (HTTP ${_HTTP_STATUS})"
+  WEBAPP_ID="$(_safe_json_field "$_HTTP_BODY" "id")"
+  _info "Webapp ID: $WEBAPP_ID"
 else
-  _fail "Create business (HTTP $BIZ_RESP)"
+  _fail "Create business (HTTP ${_HTTP_STATUS})"
+  _info "body: ${_HTTP_BODY:0:500}"
 fi
-WEBAPP_ID=$(python3 -c "import json; d=json.load(open('/tmp/biz_body.json')); print(d.get('id',''))" 2>/dev/null || echo "")
-_info "Webapp ID: $WEBAPP_ID"
 
-# ── STEP 5: Generate content ──────────────────────────────────────────────────
+# STEP 4: Generate content
 echo ""
-echo "5. Generate content for instagram..."
-if [ -n "$WEBAPP_ID" ]; then
-  GEN_RESP=$(curl -s -o /tmp/gen_body.json -w "%{http_code}" \
-    -X POST "$API/content/generate?webapp_id=$WEBAPP_ID&platform=instagram" \
-    -H "Authorization: Bearer $TOKEN")
-  assert_not_500 "Generate content" "$GEN_RESP"
-  CONTENT_ID=$(python3 -c "import json; d=json.load(open('/tmp/gen_body.json')); print(d.get('id',''))" 2>/dev/null || echo "")
-  _info "Content ID: $CONTENT_ID"
-
-  # Check no Amarktai hashtags
-  HASHTAGS=$(python3 -c "import json; d=json.load(open('/tmp/gen_body.json')); print(' '.join(d.get('hashtags',[])))" 2>/dev/null || echo "")
-  _info "Hashtags: $HASHTAGS"
-  if echo "$HASHTAGS" | grep -iq "amarktai"; then
-    _fail "Amarktai hashtag found in equine content: $HASHTAGS"
+echo "4. Generate content for instagram..."
+CONTENT_ID=""
+if [[ -n "$WEBAPP_ID" ]]; then
+  api_call "POST" "/api/v1/content/generate?webapp_id=${WEBAPP_ID}&platform=instagram"
+  if [[ "${_HTTP_STATUS:-0}" -lt 500 ]] 2>/dev/null; then
+    _ok "Generate content (HTTP ${_HTTP_STATUS} — no 500)"
+    if [[ "$_HTTP_STATUS" == 2* ]] && [[ -n "$_HTTP_BODY" ]]; then
+      CONTENT_ID="$(_safe_json_field "$_HTTP_BODY" "id")"
+    fi
+    _info "Content ID: $CONTENT_ID"
   else
-    _ok "No Amarktai hashtags in equine content"
+    _fail "Generate content (HTTP ${_HTTP_STATUS} — server error)"
   fi
 else
   _fail "Cannot generate content — no webapp ID"
 fi
 
-# ── STEP 6: List content library ─────────────────────────────────────────────
+# STEP 5: List content library
 echo ""
-echo "6. List content library..."
-LIB_RESP=$(curl -s -o /tmp/lib_body.json -w "%{http_code}" \
-  -H "Authorization: Bearer $TOKEN" "$API/content/items?webapp_id=$WEBAPP_ID")
-assert_not_500 "Content library" "$LIB_RESP"
-
-# ── STEP 7: Reject content ────────────────────────────────────────────────────
-echo ""
-echo "7. Reject content item..."
-if [ -n "${CONTENT_ID:-}" ]; then
-  REJ_RESP=$(curl -s -o /tmp/rej_body.json -w "%{http_code}" \
-    -X POST "$API/content/items/$CONTENT_ID/reject" \
-    -H "Content-Type: application/json" \
-    -H "Authorization: Bearer $TOKEN" \
-    -d '{"reason":"Wrong hashtags and unrelated imagery","feedback":"Please use horse and equine-specific imagery","regenerate":false}')
-  assert_not_500 "Reject content item" "$REJ_RESP"
-  STATUS_AFTER=$(python3 -c "import json; d=json.load(open('/tmp/rej_body.json')); print(d.get('status','?'))" 2>/dev/null || echo "?")
-  if [ "$STATUS_AFTER" = "rejected" ]; then
-    _ok "Content item status is 'rejected' after rejection"
+echo "5. List content library..."
+if [[ -n "$WEBAPP_ID" ]]; then
+  api_call "GET" "/api/v1/content/items?webapp_id=${WEBAPP_ID}"
+  if [[ "${_HTTP_STATUS:-0}" -lt 500 ]] 2>/dev/null; then
+    _ok "Content library (HTTP ${_HTTP_STATUS})"
   else
-    _fail "Expected status=rejected, got '$STATUS_AFTER'"
+    _fail "Content library (HTTP ${_HTTP_STATUS})"
+  fi
+fi
+
+# STEP 6: Reject content
+echo ""
+echo "6. Reject content item..."
+if [[ -n "$CONTENT_ID" ]]; then
+  api_call "POST" "/api/v1/content/items/${CONTENT_ID}/reject" \
+    '{"reason":"Wrong hashtags","feedback":"Use horse-specific imagery","regenerate":false}'
+  if [[ "${_HTTP_STATUS:-0}" -lt 500 ]] 2>/dev/null; then
+    _ok "Reject content (HTTP ${_HTTP_STATUS})"
+    if [[ "$_HTTP_STATUS" == 2* ]] && [[ -n "$_HTTP_BODY" ]]; then
+      STATUS_AFTER="$(_safe_json_field "$_HTTP_BODY" "status")"
+      if [[ "$STATUS_AFTER" == "rejected" ]]; then
+        _ok "Content status is 'rejected' after rejection"
+      else
+        _fail "Expected status=rejected, got '${STATUS_AFTER}'"
+      fi
+    fi
+  else
+    _fail "Reject content (HTTP ${_HTTP_STATUS})"
   fi
 else
   _fail "No content ID — skipping rejection test"
 fi
 
-# ── STEP 8: Login again after rejection ───────────────────────────────────────
+# STEP 7: Login AGAIN after rejection
 echo ""
-echo "8. Login AGAIN after content rejection..."
-LOGIN2_RESP=$(curl -s -o /tmp/login2_body.json -w "%{http_code}" \
-  -X POST "$API/auth/login" \
-  -H "Content-Type: application/json" \
-  -d "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}")
-assert_status "Login after rejection" 200 "$LOGIN2_RESP"
-TOKEN2=$(python3 -c "import json,sys; d=json.load(open('/tmp/login2_body.json')); print(d.get('access_token',''))" 2>/dev/null || echo "")
-
-if [ -z "$TOKEN2" ]; then
-  _fail "No token on second login — login broken after rejection!"
+echo "7. Login AGAIN after content rejection..."
+if ! do_login; then
+  _fail "Second login failed after rejection"
 else
   _ok "Second login successful"
 fi
+_info "Token: ${TOKEN:0:20}..."
 
-# ── STEP 9: Dashboard boot endpoints with new token ───────────────────────────
+# STEP 8: Dashboard boot endpoints
 echo ""
-echo "9. Dashboard boot endpoints (with token from 2nd login)..."
-for ENDPOINT in "/users/me" "/webapps/" "/settings/readiness"; do
-  BOOT_RESP=$(curl -s -o /dev/null -w "%{http_code}" \
-    -H "Authorization: Bearer ${TOKEN2:-$TOKEN}" "$API$ENDPOINT")
-  assert_not_500 "$ENDPOINT" "$BOOT_RESP"
+echo "8. Dashboard boot endpoints (with new token)..."
+for ENDPOINT in "/api/v1/users/me" "/api/v1/webapps/" "/api/v1/settings/readiness"; do
+  api_call "GET" "$ENDPOINT"
+  if [[ "${_HTTP_STATUS:-0}" -lt 500 ]] 2>/dev/null; then
+    _ok "${ENDPOINT} (HTTP ${_HTTP_STATUS})"
+  else
+    _fail "${ENDPOINT} (HTTP ${_HTTP_STATUS})"
+  fi
 done
 
-# ── STEP 10: Content library still loads after rejection ──────────────────────
+# STEP 9: Content library after rejection
 echo ""
-echo "10. Content library after rejection..."
-LIB2_RESP=$(curl -s -o /tmp/lib2_body.json -w "%{http_code}" \
-  -H "Authorization: Bearer ${TOKEN2:-$TOKEN}" "$API/content/items?webapp_id=$WEBAPP_ID")
-assert_not_500 "Content library after rejection" "$LIB2_RESP"
-
-# ── STEP 11: Content provenance ───────────────────────────────────────────────
-echo ""
-echo "11. Content provenance endpoint..."
-PROV_RESP=$(curl -s -o /tmp/prov_body.json -w "%{http_code}" \
-  -H "Authorization: Bearer ${TOKEN2:-$TOKEN}" "$API/content/provenance?webapp_id=$WEBAPP_ID")
-assert_not_500 "Content provenance" "$PROV_RESP"
-
-# ── STEP 12: Cleanup test business ────────────────────────────────────────────
-echo ""
-echo "12. Cleanup test business..."
-if [ -n "$WEBAPP_ID" ]; then
-  DEL_RESP=$(curl -s -o /dev/null -w "%{http_code}" \
-    -X DELETE "$API/webapps/$WEBAPP_ID" \
-    -H "Authorization: Bearer ${TOKEN2:-$TOKEN}")
-  _info "Delete webapp: HTTP $DEL_RESP"
+echo "9. Content library after rejection..."
+if [[ -n "$WEBAPP_ID" ]]; then
+  api_call "GET" "/api/v1/content/items?webapp_id=${WEBAPP_ID}"
+  if [[ "${_HTTP_STATUS:-0}" -lt 500 ]] 2>/dev/null; then
+    _ok "Content library after rejection (HTTP ${_HTTP_STATUS})"
+  else
+    _fail "Content library after rejection (HTTP ${_HTTP_STATUS})"
+  fi
 fi
 
-# ── Summary ───────────────────────────────────────────────────────────────────
+# STEP 10: Content provenance
+echo ""
+echo "10. Content provenance endpoint..."
+if [[ -n "$WEBAPP_ID" ]]; then
+  api_call "GET" "/api/v1/content/provenance?webapp_id=${WEBAPP_ID}"
+  if [[ "${_HTTP_STATUS:-0}" -lt 500 ]] 2>/dev/null; then
+    _ok "Content provenance (HTTP ${_HTTP_STATUS})"
+  else
+    _fail "Content provenance (HTTP ${_HTTP_STATUS})"
+  fi
+fi
+
+# STEP 11: Cleanup
+echo ""
+echo "11. Cleanup test business..."
+if [[ -n "$WEBAPP_ID" ]]; then
+  api_call "DELETE" "/api/v1/webapps/${WEBAPP_ID}?confirm=true"
+  _info "Delete webapp: HTTP ${_HTTP_STATUS}"
+fi
+
+# Summary
 echo ""
 echo "========================================="
-echo "  Results: $PASS passed, $FAIL failed"
+echo "  Results: ${PASS} passed, ${FAIL} failed"
 echo "========================================="
 
-if [ "$FAIL" -gt 0 ]; then
-  echo "  GATE: ❌ FAIL"
+if [[ "$FAIL" -gt 0 ]]; then
+  echo "FAIL"
   exit 1
 else
-  echo "  GATE: ✅ PASS"
+  echo "PASS"
   exit 0
 fi

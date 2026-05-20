@@ -774,15 +774,119 @@ async def provider_resolution(
     providers = ["GENX_API_KEY", "FIRECRAWL_API_KEY", "QWEN_API_KEY", "HUGGINGFACE_TOKEN", "OPENAI_API_KEY", "GEMINI_API_KEY"]
     resolved = {}
     for key_name in providers:
+        # Check if a DB row exists (for decrypt_ok)
+        row = db.query(UserAPIKey).filter(
+            UserAPIKey.user_id == current_user.id,
+            UserAPIKey.key_name == key_name,
+            UserAPIKey.is_active == True,
+        ).first()
+        decrypt_ok: bool | None = None
+        if row:
+            try:
+                decrypted = row.get_decrypted_key()
+                decrypt_ok = bool(decrypted)
+            except Exception:
+                decrypt_ok = False
+
         key_value, source = _resolve_provider_key(db, current_user.id, key_name, getattr(settings, key_name, "") or "")
+        configured = source != "missing" and bool(key_value)
+
+        # Retrieve last test status from in-memory state if available
+        last_test_status: str | None = None
+        last_test_error: str | None = None
+        if key_name == "GENX_API_KEY":
+            ts = _GENX_LAST_TEST_STATE.get(current_user.id, {})
+            if ts.get("checked_at"):
+                last_test_status = "test_passed" if ts.get("ok") else "test_failed"
+                last_test_error = ts.get("error") or None
+        elif key_name == "FIRECRAWL_API_KEY":
+            ts = _FIRECRAWL_LAST_TEST_STATE.get(current_user.id, {})
+            if ts.get("checked_at"):
+                last_test_status = "test_passed" if ts.get("ok") else "test_failed"
+                last_test_error = ts.get("error") or None
+
         resolved[key_name] = {
+            "key_name": key_name,
             "effective_source": source,
             "masked_value": mask_value(key_value),
+            "decrypt_ok": decrypt_ok,
+            "configured": configured,
+            "last_test_status": last_test_status,
+            "last_test_error": last_test_error,
         }
     return {"providers": resolved}
 
 
-@router.post("/genx/debug-test")
+@router.get("/providers/debug")
+async def providers_debug(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Detailed provider diagnostic snapshot — no secrets returned."""
+    genx_key, genx_source = _resolve_provider_key(db, current_user.id, "GENX_API_KEY", settings.GENX_API_KEY)
+    firecrawl_key, firecrawl_source = _resolve_provider_key(db, current_user.id, "FIRECRAWL_API_KEY", settings.FIRECRAWL_API_KEY)
+    qwen_key, qwen_source = _resolve_provider_key(db, current_user.id, "QWEN_API_KEY", settings.QWEN_API_KEY)
+    hf_token, hf_source = _resolve_provider_key(db, current_user.id, "HUGGINGFACE_TOKEN", settings.HUGGINGFACE_TOKEN)
+
+    genx_models_cfg = _configured_genx_models()
+    genx_model_mapping_present = bool(genx_models_cfg["effective_default_model"])
+
+    genx_ts = _GENX_LAST_TEST_STATE.get(current_user.id, {})
+    firecrawl_ts = _FIRECRAWL_LAST_TEST_STATE.get(current_user.id, {})
+
+    # Qwen catalog summary
+    qwen_catalog_available = False
+    try:
+        from app.services.qwen_model_catalog import qwen_full_catalog
+        cat = qwen_full_catalog()
+        qwen_catalog_available = bool(cat.get("by_category"))
+    except Exception:
+        qwen_catalog_available = False
+
+    return {
+        "genx": {
+            "key_saved": genx_source != "missing",
+            "key_source": genx_source,
+            "decrypt_ok": bool(genx_key) if genx_source == "user" else None,
+            "model_mapping_present": genx_model_mapping_present,
+            "effective_model": genx_models_cfg["effective_default_model"] or None,
+            "task_models": {k: v for k, v in genx_models_cfg["task_models"].items() if v},
+            "base_url": settings.GENX_BASE_URL or None,
+            "last_test_status": ("test_passed" if genx_ts.get("ok") else "test_failed") if genx_ts.get("checked_at") else "not_tested",
+            "last_test_at": genx_ts.get("checked_at"),
+            "last_test_error": genx_ts.get("error") or None,
+            "note": (
+                "Key missing — configure GENX_API_KEY" if genx_source == "missing"
+                else ("No model configured — set GENX_DEFAULT_MODEL or a task model" if not genx_model_mapping_present else None)
+            ),
+        },
+        "qwen": {
+            "key_saved": qwen_source != "missing",
+            "key_source": qwen_source,
+            "decrypt_ok": bool(qwen_key) if qwen_source == "user" else None,
+            "catalog_available": qwen_catalog_available,
+            "budget_engine_available": bool(qwen_key),
+            "note": "Qwen budget engine available" if bool(qwen_key) else "Add QWEN_API_KEY to enable Qwen fallback",
+        },
+        "firecrawl": {
+            "key_saved": firecrawl_source != "missing",
+            "key_source": firecrawl_source,
+            "decrypt_ok": bool(firecrawl_key) if firecrawl_source == "user" else None,
+            "last_test_status": ("test_passed" if firecrawl_ts.get("ok") else "test_failed") if firecrawl_ts.get("checked_at") else "not_tested",
+            "last_test_at": firecrawl_ts.get("checked_at"),
+            "last_test_error": firecrawl_ts.get("error") or None,
+            "note": "Firecrawl key saved — test via POST /settings/firecrawl/debug-test" if bool(firecrawl_key) else "Add FIRECRAWL_API_KEY to enable web scraping",
+        },
+        "huggingface": {
+            "token_saved": hf_source != "missing",
+            "token_source": hf_source,
+            "decrypt_ok": bool(hf_token) if hf_source == "user" else None,
+            "required": False,
+            "note": "HF token saved — optional fallback provider" if bool(hf_token) else "HF token optional — add HUGGINGFACE_TOKEN to enable HF tasks",
+        },
+    }
+
+
 async def genx_debug_test(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),

@@ -398,6 +398,7 @@ export const contentApi = {
       tone?: string;
       campaignType?: string;
       productFocus?: string;
+      offer?: string;
       audience?: string;
       includeHashtags?: boolean;
       includeCta?: boolean;
@@ -411,6 +412,10 @@ export const contentApi = {
     if (options?.tone) qs.set('tone', options.tone);
     if (options?.campaignType) qs.set('campaign_type', options.campaignType);
     if (options?.productFocus) qs.set('product_focus', options.productFocus);
+    if (options?.offer) {
+      qs.set('offer', options.offer);
+      qs.set('product_focus', options.offer);
+    }
     if (options?.audience) qs.set('audience', options.audience);
     if (options?.includeHashtags !== undefined) qs.set('include_hashtags', String(options.includeHashtags));
     if (options?.includeCta !== undefined) qs.set('include_cta', String(options.includeCta));
@@ -446,6 +451,8 @@ export const contentApi = {
     objective?: string;
     tone?: string;
     audience?: string;
+    offer?: string;
+    productFocus?: string;
     autoSelectFormat?: boolean;
   }): Promise<Record<string, unknown>> => {
     return apiFetch('/content/generate-creative', {
@@ -457,6 +464,8 @@ export const contentApi = {
         objective: payload.objective,
         tone: payload.tone,
         audience: payload.audience,
+        offer: payload.offer,
+        product_focus: payload.productFocus ?? payload.offer,
         auto_select_format: payload.autoSelectFormat ?? true,
       }),
     });
@@ -468,6 +477,8 @@ export const contentApi = {
     objective?: string;
     tone?: string;
     audience?: string;
+    offer?: string;
+    productFocus?: string;
     formats?: string[];
     autoSelectFormats?: boolean;
   }): Promise<{ count: number; items: Array<Record<string, unknown>> }> => {
@@ -479,6 +490,8 @@ export const contentApi = {
         objective: payload.objective,
         tone: payload.tone,
         audience: payload.audience,
+        offer: payload.offer,
+        product_focus: payload.productFocus ?? payload.offer,
         formats: payload.formats,
         auto_select_formats: payload.autoSelectFormats ?? true,
       }),
@@ -554,11 +567,17 @@ export const contentApi = {
 
   improveItem: async (
     id: string,
-    payload?: { objective?: string; tone?: string; audience?: string }
+    payload?: { objective?: string; tone?: string; audience?: string; offer?: string; productFocus?: string }
   ): Promise<ContentLibraryItem> => {
     const data = await apiFetch<Record<string, unknown>>(`/content/items/${id}/improve`, {
       method: 'POST',
-      body: JSON.stringify(payload ?? {}),
+      body: JSON.stringify({
+        objective: payload?.objective,
+        tone: payload?.tone,
+        audience: payload?.audience,
+        offer: payload?.offer,
+        product_focus: payload?.productFocus ?? payload?.offer,
+      }),
     });
     return mapContentItem(data);
   },
@@ -567,6 +586,7 @@ export const contentApi = {
 export const settingsApi = {
   getReadiness: async (): Promise<Record<string, unknown>> => apiFetch('/settings/readiness'),
   getProviderResolution: async (): Promise<Record<string, unknown>> => apiFetch('/settings/provider-resolution'),
+  getProvidersDebug: async (): Promise<Record<string, unknown>> => apiFetch('/settings/providers/debug'),
 };
 
 export const learningApi = {
