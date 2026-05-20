@@ -38,6 +38,7 @@ export function ContentStudio({
   const [activeSection, setActiveSection] = useState('Platform Posts');
   const [format, setFormat] = useState('text_post');
   const [objective, setObjective] = useState('');
+  const [offer, setOffer] = useState('');
   const [tone, setTone] = useState('');
   const [audience, setAudience] = useState('');
   const [budgetMode, setBudgetMode] = useState('Auto');
@@ -127,6 +128,7 @@ export function ContentStudio({
     try {
       if (format === 'text_post') {
         const item = await contentApi.generate(businessId, platform, {
+          offer: offer.trim() || undefined,
           objective: objective.trim() || undefined,
           tone: tone.trim() || undefined,
           audience: audience.trim() || undefined,
@@ -137,6 +139,7 @@ export function ContentStudio({
           webappId: businessId,
           platform,
           format,
+          offer: offer.trim() || undefined,
           objective: objective.trim() || undefined,
           tone: tone.trim() || undefined,
           audience: audience.trim() || undefined,
@@ -321,6 +324,10 @@ export function ContentStudio({
             <div className="space-y-2">
               <Label htmlFor="objective" className="text-slate-200">Objective</Label>
               <Input id="objective" value={objective} onChange={(event) => setObjective(event.target.value)} placeholder="Drive leads, book demos, grow awareness" className="border-[#252A3A] bg-[#141720] text-white" />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="offer" className="text-slate-200">Offer / Product</Label>
+              <Input id="offer" value={offer} onChange={(event) => setOffer(event.target.value)} placeholder="e.g. 50% off, free trial, new product launch" className="border-[#252A3A] bg-[#141720] text-white" />
             </div>
             <div className="space-y-2">
               <Label htmlFor="tone" className="text-slate-200">Tone</Label>
