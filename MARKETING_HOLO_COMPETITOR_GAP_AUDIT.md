@@ -1,11 +1,17 @@
 # Marketing Holo Competitor Gap Audit
 
-## Production Workspace Comparison
-- **Unified Library:** Added persisted content library endpoints and dashboard/content studio rendering from saved records.
-- **Immediate Feedback:** Generated content now appears immediately and remains visible after refresh through `/content/webapp/{id}` + `/content/items`.
-- **Actionability:** Added duplicate, improve, schedule, and delete item actions in Content Studio.
+## What was restored toward production parity
+- Unified 12-platform catalog across backend and frontend.
+- Real scheduler persistence instead of list-only placeholder scheduling.
+- Persistent learning tables instead of in-memory learning only.
+- Media job and media asset tables plus API surfaces.
+- Capability route endpoint for explicit provider/model decisions.
 
-## Gaps vs full autonomous competitors
-- Dedicated media job queue and asset tables are not yet fully normalized.
-- Daily learning is still not fully DB-persistent.
-- Full autonomous campaign v2 orchestration remains partial.
+## Still behind full autonomous competitors
+- No full auto-publisher worker execution path yet.
+- No true drag/drop campaign scheduler UX.
+- Multimodal model execution is truthful but still limited by configured providers.
+- Full competitor-aware campaign orchestration remains partial.
+
+## Verdict
+- LIMITED: major platform/scheduler/content/router gaps are narrowed, but full autonomy is still blocked.

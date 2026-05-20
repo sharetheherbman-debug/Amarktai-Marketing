@@ -1,14 +1,30 @@
 # Marketing Model Routing Audit
 
-## Scope
-- Content library persistence and visibility flow
-- GenX/Qwen/HF routing signals surfaced from generation metadata
+## What was broken
+- GenX/Qwen/HF routing was implicit and scattered.
+- No explicit capability routing endpoint existed.
+- Qwen catalog support was far below the available model surface.
 
-## Findings
-- Content items now persist provider attempted/actual, model/task/capability, generation status, degraded flag, and reason in saved library payloads.
-- Generate Creative and Generate Pack now return persisted `content_id` values and write saved items for non-text formats.
-- Dashboard and business detail now show provider/model and degraded status directly from persisted data.
+## What was restored
+- Added provider router modules:
+  - `backend/app/services/provider_decision_engine.py`
+  - `backend/app/services/genx_router_client.py`
+  - `backend/app/services/qwen_model_catalog.py`
+  - `backend/app/services/qwen_router.py`
+- Added route endpoint:
+  - `POST /api/v1/capabilities/route`
+- Capability responses now include platform support metadata through `backend/app/services/capability_catalog.py`.
+- Content generation metadata remains persisted in `backend/app/api/v1/endpoints/content.py`.
 
-## Remaining Gaps
-- Dedicated ProviderDecisionEngine service and explicit route endpoint still need full implementation.
-- Per-user GenX model mapping endpoints/UI are still partial.
+## Current routing truth
+- Budget/routine routing can select Qwen through `provider_decision_engine`.
+- Multimodal/premium routing prefers GenX when configured.
+- Hugging Face remains a truthful fallback.
+- Template remains final fallback.
+
+## Remaining gaps
+- Full async job orchestration for every GenX/Qwen multimodal model is not yet wired end-to-end.
+- The route decision is currently available via API, but not every generation path enforces it yet.
+
+## Go-live status
+- LIMITED: routing truth and capability endpoint restored, full multimodal orchestration still partial.

@@ -153,8 +153,8 @@ async def get_integrations(
         platform = platform_meta["id"]
         try:
             state = platform_posting_state(db, current_user.id, platform)
-        except Exception as exc:
-            logger.warning("Platform readiness failed for user %s platform %s: %s", current_user.id, platform, str(exc)[:300])
+        except Exception:
+            logger.warning("Platform readiness evaluation failed")
             state = {
                 "oauth_configured": False,
                 "user_connected": False,
