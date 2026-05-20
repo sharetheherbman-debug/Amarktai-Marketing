@@ -6,21 +6,14 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
 from app.models.user_api_key import UserIntegration
-from app.services.platform_catalog import LAUNCH_PLATFORMS, normalize_platform
+from app.services.platform_catalog import all_platforms, normalize_platform, platform_map
 
-PLATFORM_KEYS = list(LAUNCH_PLATFORMS)
+PLATFORM_KEYS = list(all_platforms())
 
 POSTING_IMPLEMENTED = {
-    "facebook": True,
-    "instagram": True,
-    "linkedin": True,
-    "twitter": False,
-    "tiktok": False,
-    "youtube": False,
-    "reddit": True,
-    "pinterest": True,
+    key: bool((platform_map().get(key) or {}).get("posting_supported", False))
+    for key in PLATFORM_KEYS
 }
 
 REQUIRED_SCOPES = {
@@ -32,6 +25,10 @@ REQUIRED_SCOPES = {
     "youtube": {"https://www.googleapis.com/auth/youtube.upload"},
     "reddit": {"submit"},
     "pinterest": {"pins:write"},
+    "threads": {"threads_content_publish"},
+    "bluesky": {"atproto"},
+    "telegram": {"messages"},
+    "snapchat": {"snapchat-marketing-api"},
 }
 
 REQUIRED_PLATFORM_FIELDS = {
@@ -43,28 +40,11 @@ REQUIRED_PLATFORM_FIELDS = {
     "youtube": set(),
     "reddit": {"subreddit"},
     "pinterest": {"board_id"},
+    "threads": set(),
+    "bluesky": set(),
+    "telegram": {"channel_id"},
+    "snapchat": set(),
 }
-
-
-def _oauth_configured(platform: str) -> bool:
-    p = normalize_platform(platform)
-    if p == "facebook":
-        return bool(settings.META_APP_ID and settings.META_APP_SECRET)
-    if p == "instagram":
-        return bool(settings.META_APP_ID and settings.META_APP_SECRET)
-    if p == "linkedin":
-        return bool(settings.LINKEDIN_CLIENT_ID and settings.LINKEDIN_CLIENT_SECRET)
-    if p == "twitter":
-        return bool(settings.TWITTER_CLIENT_ID and settings.TWITTER_CLIENT_SECRET)
-    if p == "tiktok":
-        return bool(settings.TIKTOK_CLIENT_KEY and settings.TIKTOK_CLIENT_SECRET)
-    if p == "youtube":
-        return bool(settings.YOUTUBE_CLIENT_ID and settings.YOUTUBE_CLIENT_SECRET)
-    if p == "reddit":
-        return bool(settings.REDDIT_CLIENT_ID and settings.REDDIT_CLIENT_SECRET)
-    if p == "pinterest":
-        return bool(settings.PINTEREST_CLIENT_ID and settings.PINTEREST_CLIENT_SECRET)
-    return False
 
 
 def _parse_scopes(scopes_value: str | None) -> set[str]:
@@ -80,12 +60,13 @@ def _parse_scopes(scopes_value: str | None) -> set[str]:
 
 def platform_posting_state(db: Session, user_id: str, platform: str) -> dict[str, Any]:
     p = normalize_platform(platform)
+    catalog_entry = platform_map().get(p, {})
     integration = db.query(UserIntegration).filter(
         UserIntegration.user_id == user_id,
         UserIntegration.platform == p,
     ).first()
 
-    oauth_configured = _oauth_configured(p)
+    oauth_configured = bool(catalog_entry.get("oauth_configured", False))
     user_connected = bool(integration and integration.is_connected)
     has_access_token = False
     token_valid = False
@@ -114,10 +95,10 @@ def platform_posting_state(db: Session, user_id: str, platform: str) -> dict[str
     payload_ok = all(bool(payload_data.get(k)) for k in payload_fields)
 
     required_scopes = REQUIRED_SCOPES.get(p, set())
-    scopes_ok = bool(required_scopes) and required_scopes.issubset(scopes_available)
+    scopes_ok = required_scopes.issubset(scopes_available) if required_scopes else True
     posting_supported = POSTING_IMPLEMENTED.get(p, False)
-    analytics_supported = p in {"facebook", "instagram", "linkedin", "twitter", "tiktok", "youtube", "reddit", "pinterest"}
-    rate_limit_known = p in {"facebook", "instagram", "linkedin", "twitter", "tiktok", "youtube", "reddit", "pinterest"}
+    analytics_supported = bool(catalog_entry.get("analytics_supported", False))
+    rate_limit_known = analytics_supported
 
     missing: list[str] = []
     if not oauth_configured:
@@ -134,11 +115,7 @@ def platform_posting_state(db: Session, user_id: str, platform: str) -> dict[str
         missing.append("platform_target")
 
     can_post_now = oauth_configured and user_connected and token_valid and scopes_ok and posting_supported and payload_ok
-    status = (
-        "Ready to post"
-        if can_post_now
-        else ("Not supported yet" if not posting_supported else ("Needs connection" if not user_connected else ("Needs token refresh" if not token_valid else "Needs connection")))
-    )
+    status = "Ready to post" if can_post_now else catalog_entry.get("status_label", "Generation only")
 
     return {
         "platform": p,
@@ -166,6 +143,8 @@ def platform_posting_state(db: Session, user_id: str, platform: str) -> dict[str
         "platform_target_ok": payload_ok,
         "required_platform_fields": sorted(payload_fields),
         "ui_status": status,
+        "status_label": catalog_entry.get("status_label", status),
+        "user_message": catalog_entry.get("user_message", "Content generation is available."),
     }
 
 

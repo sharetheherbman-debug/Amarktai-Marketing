@@ -6,7 +6,7 @@ from app.api.v1.endpoints import (
     remix, tools, leads, groups, blog, oauth, billing, events,
     amarktai_status, dashboard, settings, contact,
     stats, changelog, notifications, scheduler, publishing, social_rules,
-    capabilities, platform_intelligence, agents, learning,
+    capabilities, platform_intelligence, agents, learning, media, workers,
 )
 
 api_router = APIRouter()
@@ -76,3 +76,5 @@ api_router.include_router(capabilities.router, prefix="/capabilities", tags=["ca
 api_router.include_router(platform_intelligence.router, prefix="/platform-intelligence", tags=["platform-intelligence"])
 api_router.include_router(agents.router, prefix="/agents", tags=["agents"])
 api_router.include_router(learning.router, prefix="/learning", tags=["learning"])
+api_router.include_router(media.router, prefix="/media", tags=["media"])
+api_router.include_router(workers.router, prefix="/workers", tags=["workers"])

@@ -18,6 +18,7 @@ from app.models.content import Content as ContentModel, ContentStatus
 from app.models.analytics import Analytics as AnalyticsModel
 from app.models.engagement import ABTest as ABTestModel
 from app.models.tools import ContentRemix as ContentRemixModel, FeedbackAnalysis as FeedbackAnalysisModel, ViralSparkReport as ViralSparkReportModel, AudienceMapReport as AudienceMapReportModel
+from app.models.marketing_runtime import SchedulerItem, MediaJob, MediaAsset, LearningRun, LearningInsight, BusinessPlatformPreference
 from app.models.user import User
 from app.schemas.webapp import WebApp, WebAppCreate, WebAppUpdate
 from app.api.deps import get_current_user, is_admin_user
@@ -253,6 +254,18 @@ def _delete_related_business_records(db: Session, *, user_id: str, webapp_id: st
             AnalyticsModel.user_id == user_id,
             AnalyticsModel.content_id.in_(content_ids),
         ).delete(synchronize_session=False)
+        db.query(SchedulerItem).filter(
+            SchedulerItem.user_id == user_id,
+            SchedulerItem.content_id.in_(content_ids),
+        ).delete(synchronize_session=False)
+        db.query(MediaJob).filter(
+            MediaJob.user_id == user_id,
+            MediaJob.content_id.in_(content_ids),
+        ).delete(synchronize_session=False)
+        db.query(MediaAsset).filter(
+            MediaAsset.user_id == user_id,
+            MediaAsset.content_id.in_(content_ids),
+        ).delete(synchronize_session=False)
 
     db.query(ABTestModel).filter(
         ABTestModel.user_id == user_id,
@@ -274,6 +287,30 @@ def _delete_related_business_records(db: Session, *, user_id: str, webapp_id: st
     db.query(AudienceMapReportModel).filter(
         AudienceMapReportModel.user_id == user_id,
         AudienceMapReportModel.webapp_id == webapp_id,
+    ).delete(synchronize_session=False)
+    db.query(SchedulerItem).filter(
+        SchedulerItem.user_id == user_id,
+        SchedulerItem.business_id == webapp_id,
+    ).delete(synchronize_session=False)
+    db.query(MediaJob).filter(
+        MediaJob.user_id == user_id,
+        MediaJob.business_id == webapp_id,
+    ).delete(synchronize_session=False)
+    db.query(MediaAsset).filter(
+        MediaAsset.user_id == user_id,
+        MediaAsset.business_id == webapp_id,
+    ).delete(synchronize_session=False)
+    db.query(LearningInsight).filter(
+        LearningInsight.user_id == user_id,
+        LearningInsight.business_id == webapp_id,
+    ).delete(synchronize_session=False)
+    db.query(LearningRun).filter(
+        LearningRun.user_id == user_id,
+        LearningRun.business_id == webapp_id,
+    ).delete(synchronize_session=False)
+    db.query(BusinessPlatformPreference).filter(
+        BusinessPlatformPreference.user_id == user_id,
+        BusinessPlatformPreference.business_id == webapp_id,
     ).delete(synchronize_session=False)
 
     db.query(ContentModel).filter(

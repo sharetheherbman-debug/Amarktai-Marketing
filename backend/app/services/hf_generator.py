@@ -977,6 +977,7 @@ Provide a JSON object:
             "You are an expert social media copywriter for AmarktAI Marketing. "
             "You create high-converting content that drives leads and engagement without spammy repetition. "
             "Do not claim private algorithm certainty. Follow platform policy-safe guidance. "
+            "Market the selected business, not AmarktAI. Never use #Amarktai unless the business itself is Amarktai. "
             "Always respond with valid JSON only – no markdown, no extra text."
         )
 

@@ -14,6 +14,10 @@ PLATFORM_STYLE = {
     "reddit": {"focus": "discussion-first, low promotion", "hook_style": "community-first discussion prompt"},
     "twitter": {"focus": "concise/thread-first", "hook_style": "short curiosity hook"},
     "facebook": {"focus": "community/CTA-first", "hook_style": "community value + CTA"},
+    "threads": {"focus": "conversation-first", "hook_style": "comment-magnet conversation opener"},
+    "bluesky": {"focus": "thoughtful text/image", "hook_style": "opinion or insight-led opener"},
+    "telegram": {"focus": "channel-update/value-first", "hook_style": "news bulletin or high-value update"},
+    "snapchat": {"focus": "ephemeral visual-first", "hook_style": "urgent, punchy story opener"},
 }
 
 

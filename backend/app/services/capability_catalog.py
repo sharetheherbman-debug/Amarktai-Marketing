@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.services.platform_catalog import platform_catalog
+
 
 CAPABILITIES: list[dict[str, Any]] = [
     {"id": "website_scrape", "label": "Website scrape", "description": "Scrape website content for business context.", "providers": ["firecrawl"], "output_type": "json", "dashboard_action": "Analyze Website", "requirements": ["FIRECRAWL_API_KEY"]},
@@ -87,6 +89,7 @@ def build_capability_catalog(
                 "required_models_or_tasks": [],
                 "output_type": item["output_type"],
                 "dashboard_action": item["dashboard_action"],
+                "platform_support": platform_catalog(),
             }
         )
     return output

@@ -14,6 +14,7 @@ import {
   CheckCircle2,
   AlertCircle,
   ExternalLink,
+  Globe,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -22,6 +23,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { PLATFORM_CATALOG } from '@/lib/platformCatalog';
 
 interface ProviderKeyItem {
   key_name: string;
@@ -78,16 +80,20 @@ const optionalProviders = [
   { key: 'GEMINI_API_KEY', label: 'Gemini' },
 ] as const;
 
-const socialPlatforms = [
-  { id: 'instagram', label: 'Instagram', icon: Instagram },
-  { id: 'facebook', label: 'Facebook', icon: Facebook },
-  { id: 'linkedin', label: 'LinkedIn', icon: Linkedin },
-  { id: 'twitter', label: 'X / Twitter', icon: Twitter },
-  { id: 'tiktok', label: 'TikTok', icon: Music },
-  { id: 'youtube', label: 'YouTube', icon: Youtube },
-  { id: 'reddit', label: 'Reddit', icon: MessageSquare },
-  { id: 'pinterest', label: 'Pinterest', icon: Pin },
-] as const;
+const platformIcons = {
+  instagram: Instagram,
+  facebook: Facebook,
+  linkedin: Linkedin,
+  twitter: Twitter,
+  tiktok: Music,
+  youtube: Youtube,
+  reddit: MessageSquare,
+  pinterest: Pin,
+  threads: MessageSquare,
+  bluesky: Globe,
+  telegram: MessageSquare,
+  snapchat: Globe,
+} as const;
 
 function authHeaders(): Record<string, string> {
   const token = localStorage.getItem('amarktai_token');
@@ -376,8 +382,8 @@ export default function IntegrationsPage() {
           <CardDescription>Generation is always available. OAuth only unlocks posting readiness.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 xl:grid-cols-2">
-          {socialPlatforms.map((platform) => {
-            const Icon = platform.icon;
+          {PLATFORM_CATALOG.map((platform) => {
+            const Icon = platformIcons[platform.id] ?? Globe;
             const integration = integrations.find((item) => item.id === platform.id);
             const state = socialReadiness[platform.id] || {};
             const missing = integration?.missing ?? ((state.missing as string[] | undefined) ?? []);

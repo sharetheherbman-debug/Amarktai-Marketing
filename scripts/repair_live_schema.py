@@ -113,6 +113,109 @@ TABLE_INDEXES: dict[str, list[tuple[str, str]]] = {
     "analytics": [("ix_analytics_user_platform_date", "user_id, platform, date")],
 }
 
+CREATE_TABLE_SQL: dict[str, str] = {
+    "scheduler_items": """
+        CREATE TABLE scheduler_items (
+            id VARCHAR(36) PRIMARY KEY,
+            user_id VARCHAR(36) NOT NULL,
+            business_id VARCHAR(36) NOT NULL,
+            content_id VARCHAR(36) NOT NULL,
+            platform VARCHAR(64) NOT NULL,
+            title VARCHAR(512) NOT NULL DEFAULT '',
+            planned_at DATETIME NOT NULL,
+            status VARCHAR(32) NOT NULL DEFAULT 'scheduled',
+            posting_readiness VARCHAR(32) NOT NULL DEFAULT 'planning_only',
+            mode VARCHAR(16) NOT NULL DEFAULT 'manual',
+            notes TEXT NULL,
+            metadata_json JSON NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NULL
+        )
+    """,
+    "media_jobs": """
+        CREATE TABLE media_jobs (
+            id VARCHAR(36) PRIMARY KEY,
+            user_id VARCHAR(36) NOT NULL,
+            business_id VARCHAR(36) NOT NULL,
+            content_id VARCHAR(36) NULL,
+            provider VARCHAR(64) NOT NULL DEFAULT 'template',
+            model VARCHAR(128) NULL,
+            task VARCHAR(64) NOT NULL DEFAULT 'media_generation',
+            external_job_id VARCHAR(255) NULL,
+            status VARCHAR(32) NOT NULL DEFAULT 'queued',
+            prompt TEXT NULL,
+            result_url TEXT NULL,
+            error_message TEXT NULL,
+            metadata_json JSON NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NULL
+        )
+    """,
+    "media_assets": """
+        CREATE TABLE media_assets (
+            id VARCHAR(36) PRIMARY KEY,
+            user_id VARCHAR(36) NOT NULL,
+            business_id VARCHAR(36) NOT NULL,
+            content_id VARCHAR(36) NULL,
+            media_job_id VARCHAR(36) NULL,
+            provider VARCHAR(64) NOT NULL DEFAULT 'template',
+            model VARCHAR(128) NULL,
+            asset_type VARCHAR(32) NOT NULL DEFAULT 'prompt',
+            title VARCHAR(255) NOT NULL DEFAULT '',
+            url TEXT NULL,
+            preview_url TEXT NULL,
+            prompt TEXT NULL,
+            metadata_json JSON NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """,
+    "learning_runs": """
+        CREATE TABLE learning_runs (
+            id VARCHAR(36) PRIMARY KEY,
+            user_id VARCHAR(36) NOT NULL,
+            business_id VARCHAR(36) NULL,
+            status VARCHAR(32) NOT NULL DEFAULT 'completed',
+            metrics_records INT NOT NULL DEFAULT 0,
+            generated_count INT NOT NULL DEFAULT 0,
+            summary TEXT NULL,
+            metadata_json JSON NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """,
+    "learning_insights": """
+        CREATE TABLE learning_insights (
+            id VARCHAR(36) PRIMARY KEY,
+            learning_run_id VARCHAR(36) NOT NULL,
+            user_id VARCHAR(36) NOT NULL,
+            business_id VARCHAR(36) NULL,
+            platform VARCHAR(64) NULL,
+            format VARCHAR(64) NULL,
+            provider VARCHAR(64) NULL,
+            model VARCHAR(128) NULL,
+            what_worked JSON NULL,
+            what_failed JSON NULL,
+            recommendations JSON NULL,
+            metadata_json JSON NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """,
+    "business_platform_preferences": """
+        CREATE TABLE business_platform_preferences (
+            id VARCHAR(36) PRIMARY KEY,
+            user_id VARCHAR(36) NOT NULL,
+            business_id VARCHAR(36) NOT NULL,
+            platform VARCHAR(64) NOT NULL,
+            preferred_provider VARCHAR(64) NULL,
+            preferred_model VARCHAR(128) NULL,
+            budget_mode VARCHAR(32) NULL,
+            preferred_formats JSON NULL,
+            metadata_json JSON NULL,
+            is_active BOOLEAN DEFAULT TRUE,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """,
+}
+
 
 def _exec(conn, sql: str) -> None:
     conn.execute(text(sql))
@@ -147,6 +250,13 @@ def main() -> int:
 
     engine = create_engine(args.database_url)
     with engine.begin() as conn:
+        inspector = inspect(conn)
+        tables = set(inspector.get_table_names())
+
+        for table_name, ddl in CREATE_TABLE_SQL.items():
+            if table_name not in tables:
+                _exec(conn, ddl)
+                print(f"CREATED TABLE: {table_name}")
         inspector = inspect(conn)
         tables = set(inspector.get_table_names())
 

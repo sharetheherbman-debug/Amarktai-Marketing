@@ -32,7 +32,9 @@ from app.schemas.content import Content, ContentUpdate
 from app.services.social_rules import get_social_rule, resolve_platform_key
 from app.services.provider_catalog import resolve_user_api_key
 from app.services.business_intelligence import analyze_business
-from app.services.platform_catalog import filter_launch_platforms, launch_platforms, normalize_platform as normalize_catalog_platform
+from app.services.platform_catalog import all_platforms, filter_launch_platforms, launch_platforms, normalize_platform as normalize_catalog_platform
+from app.services.scheduler_runtime import upsert_scheduler_item
+from app.models.marketing_runtime import SchedulerMode
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +62,7 @@ class GenerateCreativeRequest(BaseModel):
 
 class GeneratePackRequest(BaseModel):
     webapp_id: str
-    platforms: list[str] = ["instagram", "facebook", "linkedin", "twitter", "tiktok", "youtube", "reddit", "pinterest"]
+    platforms: list[str] = list(all_platforms())
     objective: str | None = None
     tone: str | None = None
     audience: str | None = None
@@ -355,6 +357,8 @@ def _content_item_payload(content: ContentModel) -> dict:
         "media_asset_ids": _safe_list(metadata.get("media_asset_ids")),
         "media_urls": _safe_list(content.media_urls),
         "source_business_snapshot": business_snapshot,
+        "scheduler_item_id": metadata.get("scheduler_item_id"),
+        "scheduled_for": content.scheduled_for,
         "scrape_snapshot": metadata.get("scrape_snapshot"),
         "prompt_hash": metadata.get("prompt_hash"),
         "created_at": content.created_at,
@@ -692,8 +696,18 @@ async def schedule_content_item(
             scheduled_for = datetime.fromisoformat(payload.scheduled_for.replace("Z", "+00:00"))
         except ValueError as exc:
             raise HTTPException(status_code=422, detail="scheduled_for must be an ISO datetime.") from exc
-    content.status = ContentStatus.SCHEDULED
-    content.scheduled_for = scheduled_for or (datetime.now(timezone.utc) + timedelta(hours=1))
+    planned_at = scheduled_for or (datetime.now(timezone.utc) + timedelta(hours=1))
+    item = upsert_scheduler_item(
+        db,
+        user_id=current_user.id,
+        content=content,
+        planned_at=planned_at,
+        mode=SchedulerMode.MANUAL.value,
+    )
+    metadata = dict(content.generation_metadata or {})
+    metadata["scheduler_item_id"] = item.id
+    metadata["schedule_status"] = item.status
+    content.generation_metadata = metadata
     db.commit()
     db.refresh(content)
     return _content_item_payload(content)
@@ -888,6 +902,9 @@ async def generate_content(
     """Generate AI content (text + image/video). Falls back to templates if no AI key configured."""
     from app.models.webapp import WebApp
     from app.services.media_service import get_media_url, VIDEO_PLATFORMS
+    from app.services.business_grounding import build_business_grounding_context, score_business_grounding
+    from app.services.hashtag_strategy import build_hashtag_strategy
+    from app.services.content_quality_gate import evaluate_quality_gate
 
     platform = normalize_catalog_platform(platform)
     if platform not in launch_platforms():
@@ -940,6 +957,8 @@ async def generate_content(
         webapp_data["objective"] = objective
     if tone:
         webapp_data["tone"] = tone
+    grounding_context = build_business_grounding_context(webapp_data)
+    webapp_data["description"] = f"{grounding_context['prompt_prefix']} {webapp_data['description']}".strip()
 
     # Snapshot of the business used at generation time (provenance)
     source_business_snapshot = {
@@ -975,7 +994,11 @@ async def generate_content(
         )
 
     # Filter banned system hashtags from result
-    result["hashtags"] = _filter_hashtags(result.get("hashtags", []), business_name=webapp.name or "")
+    hashtag_strategy = build_hashtag_strategy(webapp_data, platform)
+    merged_hashtags = result.get("hashtags", []) or hashtag_strategy["hashtags"]
+    if hashtag_strategy["hashtags"]:
+        merged_hashtags = list(dict.fromkeys([*hashtag_strategy["hashtags"], *merged_hashtags]))
+    result["hashtags"] = _filter_hashtags(merged_hashtags, business_name=webapp.name or "")
 
     media_urls = await get_media_url(platform, webapp_data, qwen_key or hf_token)
     content_type = "video" if platform in VIDEO_PLATFORMS else "image"
@@ -1001,6 +1024,11 @@ async def generate_content(
     logger.info(
         "generate_content user=%s webapp=%s platform=%s provider=%s",
         current_user.id, webapp_id, platform, provider_name,
+    )
+    grounding_review = score_business_grounding(result.get("caption", ""), webapp_data)
+    quality_gate = evaluate_quality_gate(
+        business_grounding_score=int(grounding_review["business_grounding_score"]),
+        hashtag_relevance_score=int(hashtag_strategy["hashtag_relevance_score"]),
     )
 
     db_content = ContentModel(
@@ -1044,6 +1072,10 @@ async def generate_content(
             "warnings": generation_warnings,
             "degraded": generation_status != "genx_success",
             "model": result.get("model", ""),
+            "business_grounding_score": grounding_review["business_grounding_score"],
+            "hashtag_relevance_score": hashtag_strategy["hashtag_relevance_score"],
+            "quality_gate": quality_gate["status"],
+            "quality_gate_issues": quality_gate["issues"],
         },
     )
     db.add(db_content)
@@ -1129,6 +1161,9 @@ async def generate_creative(
         generate_carousel_outline,
     )
     from app.services.platform_intelligence import review_content
+    from app.services.business_grounding import build_business_grounding_context, score_business_grounding
+    from app.services.content_quality_gate import evaluate_quality_gate
+    from app.services.creative_brief_builder import score_creative_relevance
 
     webapp = db.query(WebApp).filter(WebApp.id == payload.webapp_id, WebApp.user_id == current_user.id).first()
     if not webapp:
@@ -1163,6 +1198,8 @@ async def generate_creative(
         "market_location": webapp_data.get("market_location", ""),
         "brand_voice": webapp_data.get("brand_voice", ""),
     }
+    grounding_context = build_business_grounding_context(webapp_data)
+    webapp_data["description"] = f"{grounding_context['prompt_prefix']} {webapp_data['description']}".strip()
 
     result: dict[str, object] = {
         "platform": normalize_catalog_platform(payload.platform),
@@ -1246,6 +1283,17 @@ async def generate_creative(
 
     content_for_review = result.get("text") or result.get("video_script") or result.get("avatar_script") or result.get("image_prompt") or ""
     platform_review = review_content(platform=payload.platform, content=str(content_for_review))
+    grounding_review = score_business_grounding(str(content_for_review), webapp_data)
+    creative_review = score_creative_relevance(
+        str(content_for_review),
+        str(result.get("image_prompt") or result.get("thumbnail_prompt") or ""),
+        webapp_data,
+    )
+    quality_gate = evaluate_quality_gate(
+        business_grounding_score=int(grounding_review["business_grounding_score"]),
+        hashtag_relevance_score=80,
+        creative_relevance_score=int(creative_review["creative_relevance_score"]),
+    )
     generation_status = "genx_failed_qwen_fallback" if genx_key and provider_actual == "qwen" else ("success" if provider_actual != "template" else "template_fallback")
     degraded = generation_status != "success"
     generation_metadata = {
@@ -1276,6 +1324,10 @@ async def generate_creative(
         "media_asset_ids": result.get("media_asset_ids", []),
         "warnings": platform_review["risks"],
         "cta": result.get("cta"),
+        "business_grounding_score": grounding_review["business_grounding_score"],
+        "creative_relevance_score": creative_review["creative_relevance_score"],
+        "quality_gate": quality_gate["status"],
+        "quality_gate_issues": quality_gate["issues"],
     }
     media_urls = [str(url) for url in [result.get("image_url"), result.get("video_url"), result.get("avatar_url")] if isinstance(url, str) and url]
     hashtags = _filter_hashtags(_safe_list(result.get("hashtags")), business_name=webapp.name or "")

@@ -27,14 +27,13 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { contentApi, learningApi, webAppApi } from '@/lib/api';
+import { PLATFORM_CATALOG } from '@/lib/platformCatalog';
 import type { ContentLibraryItem, Platform, WebApp } from '@/types';
 
-const platforms: Array<{ id: Platform; label: string }> = [
-  { id: 'instagram', label: 'Generate Instagram' },
-  { id: 'facebook', label: 'Generate Facebook' },
-  { id: 'linkedin', label: 'Generate LinkedIn' },
-  { id: 'twitter', label: 'Generate X / Twitter' },
-];
+const platforms: Array<{ id: Platform; label: string }> = PLATFORM_CATALOG.map((item) => ({
+  id: item.id,
+  label: `Generate ${item.label}`,
+}));
 
 export default function BusinessDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -290,7 +289,7 @@ export default function BusinessDetailPage() {
                           View Library
                         </Button>
                       </Link>
-                      <Link to="/dashboard/scheduler" className="block">
+                      <Link to={`/dashboard/scheduler?business=${business.id}`} className="block">
                         <Button variant="outline" className="w-full border-[#252A3A] bg-transparent text-slate-200 hover:bg-white/5">
                           <Calendar className="mr-2 h-4 w-4" />
                           Schedule

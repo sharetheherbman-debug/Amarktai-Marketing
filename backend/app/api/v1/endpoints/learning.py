@@ -29,6 +29,7 @@ async def run_learning(
     metrics_records = db.query(Analytics).filter(Analytics.user_id == current_user.id).count()
     generated_count = db.query(Content).filter(Content.user_id == current_user.id).count()
     return run_learning_now(
+        db=db,
         user_id=current_user.id,
         webapp_id=payload.webapp_id,
         metrics_records=metrics_records,
@@ -39,23 +40,26 @@ async def run_learning(
 @router.get("/status")
 async def get_learning_status(
     current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    return learning_status(current_user.id)
+    return learning_status(db, current_user.id)
 
 
 @router.get("/insights")
 async def get_learning_insights(
     current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    return learning_insights(current_user.id)
+    return learning_insights(db, current_user.id)
 
 
 @router.get("/insights/{webapp_id}")
 async def get_learning_insights_for_business(
     webapp_id: str,
     current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    payload = learning_insights(current_user.id, webapp_id=webapp_id)
+    payload = learning_insights(db, current_user.id, webapp_id=webapp_id)
     if not payload.get("insights"):
         raise HTTPException(status_code=404, detail="No learning insights for this business.")
     return payload

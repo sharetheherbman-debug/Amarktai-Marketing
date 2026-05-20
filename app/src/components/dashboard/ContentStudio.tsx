@@ -10,18 +10,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { contentApi, webAppApi } from '@/lib/api';
+import { PLATFORM_CATALOG } from '@/lib/platformCatalog';
 import type { Content, ContentLibraryItem, Platform, WebApp } from '@/types';
-
-const platforms: Array<{ id: Platform; label: string }> = [
-  { id: 'instagram', label: 'Instagram' },
-  { id: 'facebook', label: 'Facebook' },
-  { id: 'linkedin', label: 'LinkedIn' },
-  { id: 'twitter', label: 'X / Twitter' },
-  { id: 'tiktok', label: 'TikTok' },
-  { id: 'youtube', label: 'YouTube' },
-  { id: 'reddit', label: 'Reddit' },
-  { id: 'pinterest', label: 'Pinterest' },
-];
 
 function cardBody(item: ContentLibraryItem): string {
   return (
@@ -45,11 +35,15 @@ export function ContentStudio({
   const [businesses, setBusinesses] = useState<WebApp[]>([]);
   const [businessId, setBusinessId] = useState(initialBusinessId ?? '');
   const [platform, setPlatform] = useState<Platform>('instagram');
+  const [activeSection, setActiveSection] = useState('Platform Posts');
+  const [format, setFormat] = useState('text_post');
   const [objective, setObjective] = useState('');
   const [tone, setTone] = useState('');
   const [audience, setAudience] = useState('');
+  const [budgetMode, setBudgetMode] = useState('Auto');
+  const [providerMode, setProviderMode] = useState('Auto');
   const [loading, setLoading] = useState(true);
-  const [busyAction, setBusyAction] = useState<'single' | 'all' | null>(null);
+  const [busyAction, setBusyAction] = useState<'single' | 'all' | 'pack' | null>(null);
   const [apiError, setApiError] = useState<string>('');
   const [items, setItems] = useState<ContentLibraryItem[]>([]);
   const [filterPlatform, setFilterPlatform] = useState<string>('all');
@@ -61,6 +55,8 @@ export function ContentStudio({
   const [rejectReason, setRejectReason] = useState<string>('');
 
   const selectedBusiness = useMemo(() => businesses.find((item) => item.id === businessId) ?? null, [businessId, businesses]);
+  const sections = ['Campaign Plan', 'Platform Posts', 'Ads', 'Images / Creatives', 'Video / Shorts', 'YouTube Kit', 'TikTok/Reels Kit', 'Voiceover', 'Talking Avatar', 'Full 12-Platform Campaign Pack', 'Content Library', 'Media Jobs / Assets', 'Schedule', 'Learning Insights'];
+  const formatOptions = ['text_post', 'ad_copy', 'image_prompt', 'generated_image', 'carousel', 'short_video_brief', 'video_script', 'youtube_video_kit', 'tiktok_reels_kit', 'voiceover_script', 'talking_avatar_script', 'full_campaign_pack'];
 
   const loadBusinessItems = useCallback(async (nextBusinessId: string) => {
     if (!nextBusinessId) {
@@ -129,16 +125,54 @@ export function ContentStudio({
     setBusyAction('single');
     setApiError('');
     try {
-      const item = await contentApi.generate(businessId, platform, {
+      if (format === 'text_post') {
+        const item = await contentApi.generate(businessId, platform, {
+          objective: objective.trim() || undefined,
+          tone: tone.trim() || undefined,
+          audience: audience.trim() || undefined,
+        });
+        onGenerated?.([item]);
+      } else {
+        await contentApi.generateCreative({
+          webappId: businessId,
+          platform,
+          format,
+          objective: objective.trim() || undefined,
+          tone: tone.trim() || undefined,
+          audience: audience.trim() || undefined,
+          autoSelectFormat: false,
+        });
+      }
+      await refreshItems();
+      toast.success(`${platform} ${format.replaceAll('_', ' ')} created and saved.`);
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : 'Generation failed.');
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const handleGeneratePack = async () => {
+    if (!businessId) {
+      setApiError('Add or select a business before generating content.');
+      return;
+    }
+    setBusyAction('pack');
+    setApiError('');
+    try {
+      const pack = await contentApi.generatePack({
+        webappId: businessId,
+        platforms: PLATFORM_CATALOG.map((item) => item.id),
         objective: objective.trim() || undefined,
         tone: tone.trim() || undefined,
         audience: audience.trim() || undefined,
+        formats: format === 'full_campaign_pack' ? undefined : [format],
+        autoSelectFormats: format === 'full_campaign_pack',
       });
-      onGenerated?.([item]);
       await refreshItems();
-      toast.success(`${platform} draft created and saved.`);
+      toast.success(`Generated ${pack.count} pack items across all 12 platforms.`);
     } catch (error) {
-      setApiError(error instanceof Error ? error.message : 'Generation failed.');
+      setApiError(error instanceof Error ? error.message : 'Generate pack failed.');
     } finally {
       setBusyAction(null);
     }
@@ -201,7 +235,7 @@ export function ContentStudio({
       <Card className="border-[#252A3A] bg-[#0D0F14]">
         <CardHeader>
           <CardTitle>Content Studio</CardTitle>
-          <CardDescription>Generate, review, and manage saved content drafts in one workspace.</CardDescription>
+          <CardDescription>Generate, review, and manage saved content drafts, campaign packs, and media outputs in one workspace.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <div className="rounded-xl border border-[#252A3A] bg-[#141720] p-3">
@@ -229,6 +263,18 @@ export function ContentStudio({
           <CardDescription>Generated results appear immediately and remain in your saved library after refresh.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-5">
+          <div className="flex flex-wrap gap-2">
+            {sections.map((section) => (
+              <button
+                key={section}
+                type="button"
+                onClick={() => setActiveSection(section)}
+                className={`rounded-full border px-3 py-1.5 text-xs ${activeSection === section ? 'border-blue-500/40 bg-blue-500/10 text-blue-200' : 'border-[#252A3A] bg-[#141720] text-slate-300'}`}
+              >
+                {section}
+              </button>
+            ))}
+          </div>
           {apiError ? (
             <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">
               <div className="flex items-center gap-2 font-medium">
@@ -265,10 +311,10 @@ export function ContentStudio({
                 onChange={(event) => setPlatform(event.target.value as Platform)}
                 className="w-full rounded-xl border border-[#252A3A] bg-[#141720] px-3 py-2.5 text-sm text-white"
               >
-                {platforms.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.label}
-                  </option>
+                  {PLATFORM_CATALOG.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.label}
+                    </option>
                 ))}
               </select>
             </div>
@@ -280,6 +326,24 @@ export function ContentStudio({
               <Label htmlFor="tone" className="text-slate-200">Tone</Label>
               <Input id="tone" value={tone} onChange={(event) => setTone(event.target.value)} placeholder="Confident, friendly, premium" className="border-[#252A3A] bg-[#141720] text-white" />
             </div>
+            <div className="space-y-2">
+              <Label className="text-slate-200">Format</Label>
+              <select value={format} onChange={(event) => setFormat(event.target.value)} className="w-full rounded-xl border border-[#252A3A] bg-[#141720] px-3 py-2.5 text-sm text-white">
+                {formatOptions.map((option) => <option key={option} value={option}>{option.replaceAll('_', ' ')}</option>)}
+              </select>
+            </div>
+            <div className="space-y-2">
+              <Label className="text-slate-200">Budget mode</Label>
+              <select value={budgetMode} onChange={(event) => setBudgetMode(event.target.value)} className="w-full rounded-xl border border-[#252A3A] bg-[#141720] px-3 py-2.5 text-sm text-white">
+                {['Auto', 'Budget', 'Balanced', 'Premium', 'Manual'].map((option) => <option key={option} value={option}>{option}</option>)}
+              </select>
+            </div>
+            <div className="space-y-2">
+              <Label className="text-slate-200">Provider mode</Label>
+              <select value={providerMode} onChange={(event) => setProviderMode(event.target.value)} className="w-full rounded-xl border border-[#252A3A] bg-[#141720] px-3 py-2.5 text-sm text-white">
+                {['Auto', 'Qwen', 'GenX', 'Hugging Face', 'Template fallback'].map((option) => <option key={option} value={option}>{option}</option>)}
+              </select>
+            </div>
           </div>
 
           <div className="space-y-2">
@@ -290,12 +354,21 @@ export function ContentStudio({
           <div className="flex flex-wrap gap-3">
             <Button onClick={handleGenerate} disabled={busyAction !== null} className="bg-blue-600 hover:bg-blue-500">
               {busyAction === 'single' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
-              Generate Content
+              Generate
             </Button>
             <Button variant="outline" onClick={handleGenerateAll} disabled={busyAction !== null} className="border-[#252A3A] bg-transparent text-slate-200 hover:bg-white/5">
               {busyAction === 'all' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
-              Generate All Platforms
+              Generate all 12
             </Button>
+            <Button variant="outline" onClick={handleGeneratePack} disabled={busyAction !== null} className="border-[#252A3A] bg-transparent text-slate-200 hover:bg-white/5">
+              {busyAction === 'pack' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
+              Full 12-platform pack
+            </Button>
+          </div>
+          <div className="rounded-xl border border-[#252A3A] bg-[#141720] p-3 text-xs text-slate-300">
+            <p>Active section: {activeSection}</p>
+            <p>Budget mode: {budgetMode}</p>
+            <p>Provider mode: {providerMode}</p>
           </div>
         </CardContent>
       </Card>
