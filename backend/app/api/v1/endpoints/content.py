@@ -18,7 +18,8 @@ import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import List
-from pydantic import BaseModel
+from difflib import SequenceMatcher
+from pydantic import BaseModel, Field
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -84,6 +85,12 @@ class ImproveContentRequest(BaseModel):
     audience: str | None = None
     offer: str | None = None
     product_focus: str | None = None
+
+
+class RegenerateContentRequest(BaseModel):
+    feedback: str | None = None
+    avoid_previous_text: list[str] = Field(default_factory=list)
+    variation_seed: str | None = None
 
 
 class RejectItemRequest(BaseModel):
@@ -289,6 +296,23 @@ def _safe_str(value: object) -> str:
     return str(value)
 
 
+def _similarity(a: str, b: str) -> float:
+    return SequenceMatcher(None, (a or "").strip().lower(), (b or "").strip().lower()).ratio()
+
+
+def _build_preview_title(content: ContentModel, metadata: dict) -> str:
+    if metadata.get("preview_title"):
+        return str(metadata.get("preview_title"))
+    return str(content.title or f"{content.platform.title()} draft")
+
+
+def _build_preview_summary(content: ContentModel, metadata: dict) -> str:
+    if metadata.get("preview_summary"):
+        return str(metadata.get("preview_summary"))
+    caption = str(content.caption or "")
+    return caption[:220]
+
+
 def _content_item_payload(content: ContentModel) -> dict:
     """Serialize a ContentModel row into the content library item dict.
 
@@ -335,8 +359,11 @@ def _content_item_payload(content: ContentModel) -> dict:
         "format": metadata.get("format", type_val),
         "status": db_status,
         "title": _safe_str(content.title),
+        "preview_title": _build_preview_title(content, metadata),
+        "preview_summary": _build_preview_summary(content, metadata),
         "caption": _safe_str(content.caption),
         "body": _safe_str(content.caption),
+        "hooks": _safe_list(metadata.get("hooks")),
         "hashtags": _safe_list(content.hashtags),
         "cta": metadata.get("cta"),
         "image_prompt": metadata.get("image_prompt"),
@@ -351,9 +378,18 @@ def _content_item_payload(content: ContentModel) -> dict:
         "provider_attempted": metadata.get("provider_attempted"),
         "provider_actual": metadata.get("provider_actual"),
         "model_actual": metadata.get("model_actual") or metadata.get("model"),
+        "provider_selected": metadata.get("provider_actual"),
+        "model_selected": metadata.get("model_actual") or metadata.get("model"),
+        "fallback_chain": _safe_list(metadata.get("fallback_chain")),
         "task_used": metadata.get("task_used"),
         "capability_used": metadata.get("capability_used"),
         "generated_by": metadata.get("provider_actual") or metadata.get("provider_attempted") or "template",
+        "variation_seed": metadata.get("variation_seed"),
+        "uniqueness_score": metadata.get("uniqueness_score"),
+        "business_grounding_score": metadata.get("business_grounding_score"),
+        "hashtag_relevance_score": metadata.get("hashtag_relevance_score"),
+        "creative_relevance_score": metadata.get("creative_relevance_score"),
+        "warnings": _safe_list(metadata.get("warnings")),
         "generation_status": gen_status,
         "degraded": bool(metadata.get("degraded")),
         "reason": metadata.get("reason"),
@@ -363,6 +399,7 @@ def _content_item_payload(content: ContentModel) -> dict:
         "media_asset_ids": _safe_list(metadata.get("media_asset_ids")),
         "media_urls": _safe_list(content.media_urls),
         "source_business_snapshot": business_snapshot,
+        "parent_content_id": _safe_str(content.parent_content_id),
         "scheduler_item_id": metadata.get("scheduler_item_id"),
         "scheduled_for": content.scheduled_for,
         "scrape_snapshot": metadata.get("scrape_snapshot"),
@@ -649,6 +686,7 @@ async def reject_content_item(
                     caption=result.get("caption", ""),
                     hashtags=_filter_hashtags(result.get("hashtags", []), business_name=webapp.name or ""),
                     media_urls=media_urls,
+                    parent_content_id=content_id,
                     generation_metadata={
                         **_generation_package(
                             rejected_platform, result, generator_name,
@@ -786,6 +824,75 @@ async def improve_content_item(
     db.commit()
     db.refresh(improved)
     return _content_item_payload(improved)
+
+
+@router.post("/items/{content_id}/regenerate")
+async def regenerate_content_item(
+    content_id: str,
+    payload: RegenerateContentRequest = Body(default_factory=RegenerateContentRequest),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(enforce_content_quota),
+):
+    content = db.query(ContentModel).filter(
+        ContentModel.id == content_id,
+        ContentModel.user_id == current_user.id,
+    ).first()
+    if not content:
+        raise HTTPException(status_code=404, detail="Content not found")
+    prior_metadata = dict(content.generation_metadata or {})
+    feedback = (payload.feedback or "").strip()
+    improved = await generate_content(
+        webapp_id=content.webapp_id,
+        platform=content.platform,
+        objective=feedback or None,
+        db=db,
+        current_user=current_user,
+    )
+    metadata = dict(improved.generation_metadata or {})
+    avoid_list = [content.caption, *payload.avoid_previous_text]
+    similarity = _similarity(improved.caption or "", content.caption or "")
+    metadata.update(
+        {
+            "source_route": "/content/items/{id}/regenerate",
+            "source_action": "regenerate",
+            "improved_from": content.id,
+            "parent_content_id": content.id,
+            "rejection_feedback": feedback,
+            "avoid_previous_text": [text for text in avoid_list if text][:8],
+            "variation_seed": payload.variation_seed or str(uuid.uuid4()),
+            "uniqueness_score": int(max(0, min(100, round((1 - similarity) * 100)))),
+            "needs_review_duplicate": similarity >= 0.9,
+            "warnings": list(metadata.get("warnings") or []) + (["Possible duplicate copy detected; adjust angle/CTA."] if similarity >= 0.9 else []),
+            "fallback_chain": metadata.get("fallback_chain") or ["genx", "qwen", "huggingface", "template"],
+            "preview_title": metadata.get("preview_title") or prior_metadata.get("preview_title") or improved.title,
+            "preview_summary": (improved.caption or "")[:220],
+        }
+    )
+    improved.generation_metadata = metadata
+    improved.parent_content_id = content.id
+    db.commit()
+    db.refresh(improved)
+    return _content_item_payload(improved)
+
+
+@router.post("/preview")
+async def preview_content_item(
+    payload: GenerateCreativeRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(enforce_content_quota),
+):
+    generated = await generate_creative(payload=payload, db=db, current_user=current_user)
+    content_id = generated.get("content_id")
+    item = None
+    if content_id:
+        row = db.query(ContentModel).filter(ContentModel.id == content_id, ContentModel.user_id == current_user.id).first()
+        if row:
+            item = _content_item_payload(row)
+    return {
+        "status": "preview_ready",
+        "content_id": content_id,
+        "preview": item or generated,
+    }
 
 
 @router.post("/items/{content_id}/review-grounding")
@@ -1039,6 +1146,22 @@ async def generate_content(
         business_grounding_score=int(grounding_review["business_grounding_score"]),
         hashtag_relevance_score=int(hashtag_strategy["hashtag_relevance_score"]),
     )
+    recent_rows = (
+        db.query(ContentModel)
+        .filter(
+            ContentModel.user_id == current_user.id,
+            ContentModel.webapp_id == webapp_id,
+            ContentModel.platform == platform,
+        )
+        .order_by(ContentModel.created_at.desc())
+        .limit(6)
+        .all()
+    )
+    similarities = [_similarity(str(result.get("caption", "")), str(row.caption or "")) for row in recent_rows]
+    max_similarity = max(similarities) if similarities else 0.0
+    uniqueness_score = int(max(0, min(100, round((1 - max_similarity) * 100))))
+    variation_seed = str(uuid.uuid4())
+    duplicate_warning = "Possible duplicate copy detected; review before publishing." if max_similarity >= 0.9 else ""
 
     db_content = ContentModel(
         id=str(uuid.uuid4()),
@@ -1079,14 +1202,25 @@ async def generate_content(
             "scrape_provider": intelligence.get("source_provider", "manual"),
             "scrape_status": intelligence.get("scrape_status", "failed"),
             "warnings": generation_warnings,
+            "preview_title": result.get("title", "Generated Content"),
+            "preview_summary": str(result.get("caption", ""))[:220],
+            "hooks": [str(result.get("caption", "")).split("\n", 1)[0][:120]] if result.get("caption") else [],
+            "fallback_chain": [provider_attempted, provider_name, "template"],
+            "variation_seed": variation_seed,
+            "uniqueness_score": uniqueness_score,
             "degraded": generation_status != "genx_success",
             "model": result.get("model", ""),
             "business_grounding_score": grounding_review["business_grounding_score"],
             "hashtag_relevance_score": hashtag_strategy["hashtag_relevance_score"],
+            "creative_relevance_score": grounding_review["business_grounding_score"],
             "quality_gate": quality_gate["status"],
             "quality_gate_issues": quality_gate["issues"],
+            "needs_review_duplicate": max_similarity >= 0.9,
+            "parent_content_id": None,
         },
     )
+    if duplicate_warning:
+        db_content.generation_metadata["warnings"] = [*generation_warnings, duplicate_warning]
     db.add(db_content)
     db.commit()
     db.refresh(db_content)
@@ -1306,6 +1440,22 @@ async def generate_creative(
         hashtag_relevance_score=80,
         creative_relevance_score=int(creative_review["creative_relevance_score"]),
     )
+    recent_rows = (
+        db.query(ContentModel)
+        .filter(
+            ContentModel.user_id == current_user.id,
+            ContentModel.webapp_id == payload.webapp_id,
+            ContentModel.platform == normalize_catalog_platform(payload.platform),
+        )
+        .order_by(ContentModel.created_at.desc())
+        .limit(6)
+        .all()
+    )
+    content_text_value = str(content_for_review)
+    similarities = [_similarity(content_text_value, str(row.caption or "")) for row in recent_rows]
+    max_similarity = max(similarities) if similarities else 0.0
+    uniqueness_score = int(max(0, min(100, round((1 - max_similarity) * 100))))
+    variation_seed = str(uuid.uuid4())
     generation_status = "genx_failed_qwen_fallback" if genx_key and provider_actual == "qwen" else ("success" if provider_actual != "template" else "template_fallback")
     degraded = generation_status != "success"
     generation_metadata = {
@@ -1335,11 +1485,19 @@ async def generate_creative(
         "media_job_ids": result.get("media_job_ids", []),
         "media_asset_ids": result.get("media_asset_ids", []),
         "warnings": platform_review["risks"],
+        "preview_title": str(result.get("title") or f"{webapp.name or 'Business'} • {payload.platform.title()}"),
+        "preview_summary": content_text_value[:220],
+        "hooks": [content_text_value.split("\n", 1)[0][:120]] if content_text_value else [],
+        "variation_seed": variation_seed,
+        "uniqueness_score": uniqueness_score,
+        "fallback_chain": ["genx", "qwen", "huggingface", "template"],
         "cta": result.get("cta"),
         "business_grounding_score": grounding_review["business_grounding_score"],
         "creative_relevance_score": creative_review["creative_relevance_score"],
         "quality_gate": quality_gate["status"],
         "quality_gate_issues": quality_gate["issues"],
+        "needs_review_duplicate": max_similarity >= 0.9,
+        "parent_content_id": None,
     }
     media_urls = [str(url) for url in [result.get("image_url"), result.get("video_url"), result.get("avatar_url")] if isinstance(url, str) and url]
     hashtags = _filter_hashtags(_safe_list(result.get("hashtags")), business_name=webapp.name or "")
@@ -1504,6 +1662,7 @@ async def reject_content(
                 caption=result.get("caption", ""),
                 hashtags=result.get("hashtags", []),
                 media_urls=media_urls,
+                parent_content_id=content_id,
                 generation_metadata={
                     **_generation_package(
                         rejected_platform,

@@ -52,6 +52,7 @@ interface PlatformIntegration {
   missing: string[];
   status_label: string;
   user_message: string;
+  action_label?: string;
 }
 
 interface ProviderDebugResult {
@@ -78,6 +79,7 @@ const optionalProviders = [
   { key: 'HUGGINGFACE_TOKEN', label: 'HuggingFace' },
   { key: 'OPENAI_API_KEY', label: 'OpenAI' },
   { key: 'GEMINI_API_KEY', label: 'Gemini' },
+  { key: 'PIXABAY_API_KEY', label: 'Pixabay' },
 ] as const;
 
 const platformIcons = {
@@ -172,6 +174,57 @@ export default function IntegrationsPage() {
       toast.error('Failed to save key');
     } finally {
       setSavingKey(null);
+    }
+  };
+
+  const removeKey = async (keyName: string) => {
+    if (!window.confirm('This removes saved keys/connections for your account only. It does not delete businesses or content.')) return;
+    try {
+      const res = await fetch(`/api/v1/settings/api-keys/${keyName}?confirm=true`, {
+        method: 'DELETE',
+        headers: authHeaders(),
+      });
+      if (!res.ok) throw new Error();
+      toast.success('Key removed');
+      await load();
+    } catch {
+      toast.error('Failed to remove key');
+    }
+  };
+
+  const resetAllKeys = async () => {
+    if (!window.confirm('This removes saved keys/connections for your account only. It does not delete businesses or content.')) return;
+    try {
+      const res = await fetch('/api/v1/settings/api-keys/reset-all', { method: 'POST', headers: authHeaders() });
+      if (!res.ok) throw new Error();
+      toast.success('All provider keys reset');
+      await load();
+    } catch {
+      toast.error('Failed to reset provider keys');
+    }
+  };
+
+  const resetAllIntegrations = async () => {
+    if (!window.confirm('This removes saved keys/connections for your account only. It does not delete businesses or content.')) return;
+    try {
+      const res = await fetch('/api/v1/integrations/reset-all', { method: 'POST', headers: authHeaders() });
+      if (!res.ok) throw new Error();
+      toast.success('All social connections reset');
+      await load();
+    } catch {
+      toast.error('Failed to reset social connections');
+    }
+  };
+
+  const resetProviderState = async () => {
+    if (!window.confirm('This removes saved keys/connections for your account only. It does not delete businesses or content.')) return;
+    try {
+      const res = await fetch('/api/v1/settings/reset-provider-state', { method: 'POST', headers: authHeaders() });
+      if (!res.ok) throw new Error();
+      toast.success('Provider test state reset');
+      await load();
+    } catch {
+      toast.error('Failed to reset provider test state');
     }
   };
 
@@ -314,6 +367,9 @@ export default function IntegrationsPage() {
                     <ExternalLink className="mr-2 h-4 w-4" />
                     Debug
                   </Button>
+                  <Button variant="outline" onClick={() => removeKey(provider.key)} className="border-red-500/40 bg-transparent text-red-200 hover:bg-red-500/10">
+                    Remove key
+                  </Button>
                 </div>
                 {provider.key === 'GENX_API_KEY' ? (
                   <Button variant="outline" onClick={testGenxModels} disabled={testingKey === 'GENX_MODELS'} className="mt-3 border-[#252A3A] bg-transparent text-slate-200 hover:bg-white/5">
@@ -371,6 +427,9 @@ export default function IntegrationsPage() {
                 {savingKey === provider.key ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                 Save
               </Button>
+              <Button variant="outline" onClick={() => removeKey(provider.key)} className="mt-2 w-full border-red-500/40 bg-transparent text-red-200 hover:bg-red-500/10">
+                Remove key
+              </Button>
             </div>
           ))}
         </CardContent>
@@ -388,11 +447,11 @@ export default function IntegrationsPage() {
             const state = socialReadiness[platform.id] || {};
             const missing = integration?.missing ?? ((state.missing as string[] | undefined) ?? []);
             const canConnect = Boolean(integration?.oauth_supported && integration?.oauth_configured && integration?.posting_supported);
-            const connectLabel = !integration?.oauth_configured
+            const connectLabel = integration?.action_label || (!integration?.oauth_configured
               ? 'Configure OAuth app first'
               : !integration?.posting_supported
                 ? 'Posting not implemented'
-                : 'Connect OAuth';
+                : 'Connect OAuth');
             return (
               <div key={platform.id} className="rounded-2xl border border-[#252A3A] bg-[#141720] p-4">
                 <div className="flex items-start justify-between gap-4">
@@ -408,7 +467,7 @@ export default function IntegrationsPage() {
                   </Badge>
                 </div>
                 <div className="mt-4 rounded-xl border border-[#252A3A] bg-[#0D0F14] p-3 text-sm text-slate-300">
-                  <p>Posting: {integration?.user_connected ? 'OAuth connected' : 'Posting not configured'}</p>
+                  <p>Posting: {integration?.can_post_now ? 'Connected and ready' : 'Not ready for posting'}</p>
                   <p className="mt-1 text-xs text-slate-400">
                     {integration?.user_message || 'OAuth connection required only when you want to post.'}
                   </p>
@@ -431,6 +490,24 @@ export default function IntegrationsPage() {
               </div>
             );
           })}
+        </CardContent>
+      </Card>
+
+      <Card className="border-[#252A3A] bg-[#0D0F14]">
+        <CardHeader>
+          <CardTitle className="text-white">Danger Zone</CardTitle>
+          <CardDescription>This removes saved keys/connections for your account only. It does not delete businesses or content.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3 md:grid-cols-3">
+          <Button variant="outline" onClick={resetAllKeys} className="border-red-500/40 bg-transparent text-red-200 hover:bg-red-500/10">
+            Reset all provider keys
+          </Button>
+          <Button variant="outline" onClick={resetAllIntegrations} className="border-red-500/40 bg-transparent text-red-200 hover:bg-red-500/10">
+            Reset all social connections
+          </Button>
+          <Button variant="outline" onClick={resetProviderState} className="border-red-500/40 bg-transparent text-red-200 hover:bg-red-500/10">
+            Reset provider test state
+          </Button>
         </CardContent>
       </Card>
 

@@ -261,9 +261,33 @@ async def scrape_multiple(urls: list[str], firecrawl_api_key: str | None = None)
 
 
 async def test_firecrawl_key(api_key: str, *, url: str = "https://example.com") -> dict[str, str | bool]:
-    result = await _scrape_via_firecrawl(url, api_key, timeout=30)
-    if result is None:
-        return {"ok": False, "error": "Firecrawl test scrape failed."}
-    if result.error:
-        return {"ok": False, "error": result.error}
-    return {"ok": True, "error": ""}
+    if not url:
+        return {"ok": False, "status": "no_test_url", "error": "No test URL provided."}
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                _FIRECRAWL_SCRAPE_URL,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={"url": url, "formats": ["markdown"]},
+            )
+        if resp.status_code in {401, 403}:
+            return {"ok": False, "status": "provider_rejected_key", "error": f"Firecrawl rejected the API key (HTTP {resp.status_code})."}
+        if resp.status_code == 400:
+            return {"ok": False, "status": "test_url_rejected", "error": "Firecrawl rejected the test URL. Use a real business URL."}
+        if resp.status_code >= 500:
+            return {"ok": False, "status": "endpoint_unreachable", "error": f"Firecrawl endpoint error (HTTP {resp.status_code})."}
+        if resp.status_code >= 400:
+            return {"ok": False, "status": "scrape_failed", "error": f"Firecrawl scrape failed (HTTP {resp.status_code})."}
+        data = resp.json() if "json" in resp.headers.get("content-type", "").lower() else {}
+        extracted = (data.get("data") or {}) if isinstance(data, dict) else {}
+        content = ""
+        if isinstance(extracted, dict):
+            content = str(extracted.get("markdown") or extracted.get("content") or "")
+        if content.strip():
+            return {"ok": True, "status": "scrape_passed", "error": ""}
+        return {"ok": False, "status": "scrape_failed", "error": "Firecrawl response did not include parsed content."}
+    except Exception as exc:
+        return {"ok": False, "status": "endpoint_unreachable", "error": f"Firecrawl request failed: {exc}"}

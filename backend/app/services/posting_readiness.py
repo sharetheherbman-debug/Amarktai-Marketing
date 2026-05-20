@@ -58,6 +58,16 @@ def _parse_scopes(scopes_value: str | None) -> set[str]:
     return set(tokens)
 
 
+def _token_decrypt_ok(integration: UserIntegration | None) -> bool:
+    if not integration or not integration.encrypted_access_token:
+        return False
+    try:
+        token = integration.get_access_token()
+        return bool(token)
+    except Exception:
+        return False
+
+
 def platform_posting_state(db: Session, user_id: str, platform: str) -> dict[str, Any]:
     p = normalize_platform(platform)
     catalog_entry = platform_map().get(p, {})
@@ -67,8 +77,9 @@ def platform_posting_state(db: Session, user_id: str, platform: str) -> dict[str
     ).first()
 
     oauth_configured = bool(catalog_entry.get("oauth_configured", False))
-    user_connected = bool(integration and integration.is_connected)
+    marked_connected = bool(integration and integration.is_connected)
     has_access_token = False
+    token_decrypt_ok = _token_decrypt_ok(integration)
     token_valid = False
     scopes_available: set[str] = set()
 
@@ -100,13 +111,26 @@ def platform_posting_state(db: Session, user_id: str, platform: str) -> dict[str
     analytics_supported = bool(catalog_entry.get("analytics_supported", False))
     rate_limit_known = analytics_supported
 
+    user_connected = bool(
+        marked_connected
+        and has_access_token
+        and token_decrypt_ok
+        and token_valid
+        and scopes_ok
+        and payload_ok
+    )
+
     missing: list[str] = []
     if not oauth_configured:
         missing.append("oauth_config")
-    if not user_connected:
+    if not marked_connected:
         missing.append("user_connection")
+    if not has_access_token:
+        missing.append("token_missing")
+    if has_access_token and not token_decrypt_ok:
+        missing.append("token_decrypt_failed")
     if not token_valid:
-        missing.append("token")
+        missing.append("token_invalid_or_expired")
     if not scopes_ok:
         missing.append("scopes")
     if not posting_supported:
@@ -114,29 +138,36 @@ def platform_posting_state(db: Session, user_id: str, platform: str) -> dict[str
     if not payload_ok:
         missing.append("platform_target")
 
-    can_post_now = oauth_configured and user_connected and token_valid and scopes_ok and posting_supported and payload_ok
-    status = "Ready to post" if can_post_now else catalog_entry.get("status_label", "Generation only")
+    can_post_now = oauth_configured and user_connected and posting_supported
+    if not oauth_configured:
+        status = "oauth_app_not_configured"
+        action_label = "Configure OAuth app"
+    elif not posting_supported:
+        status = "generation_only"
+        action_label = "Generation only"
+    elif not user_connected:
+        status = "needs_connection"
+        action_label = "Connect account"
+    else:
+        status = "ready_to_post"
+        action_label = "Manage connection"
 
     return {
         "platform": p,
         "generate_ready": True,
         "oauth_configured": oauth_configured,
         "user_connected": user_connected,
+        "marked_connected": marked_connected,
         "token_valid": token_valid,
+        "token_decrypt_ok": token_decrypt_ok,
+        "has_access_token": has_access_token,
         "scopes_ok": scopes_ok,
         "posting_supported": posting_supported,
         "posting_ready": can_post_now,
         "analytics_supported": analytics_supported,
         "rate_limit_known": rate_limit_known,
         "can_post_now": can_post_now,
-        "status": (
-            "posting_ready"
-            if can_post_now
-            else (
-                "oauth_not_configured" if not oauth_configured
-                else ("oauth_configured" if oauth_configured and not user_connected else ("user_connected" if user_connected and not posting_supported else "posting_not_implemented"))
-            )
-        ),
+        "status": status,
         "missing": missing,
         "required_scopes": sorted(required_scopes),
         "granted_scopes": sorted(scopes_available),
@@ -144,6 +175,7 @@ def platform_posting_state(db: Session, user_id: str, platform: str) -> dict[str
         "required_platform_fields": sorted(payload_fields),
         "ui_status": status,
         "status_label": catalog_entry.get("status_label", status),
+        "action_label": action_label,
         "user_message": catalog_entry.get("user_message", "Content generation is available."),
     }
 

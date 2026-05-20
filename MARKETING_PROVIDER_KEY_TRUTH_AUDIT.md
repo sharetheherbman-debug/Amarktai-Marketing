@@ -19,7 +19,7 @@
 ### GET /api/v1/settings/provider-resolution
 
 Returns per-key truth for `GENX_API_KEY`, `FIRECRAWL_API_KEY`, `QWEN_API_KEY`,
-`HUGGINGFACE_TOKEN`, `OPENAI_API_KEY`, `GEMINI_API_KEY`.
+`HUGGINGFACE_TOKEN`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `PIXABAY_API_KEY`.
 
 Each entry includes:
 - `key_name` — the key name
@@ -29,6 +29,8 @@ Each entry includes:
 - `configured` — true/false
 - `last_test_status` — `test_passed` | `test_failed` | null
 - `last_test_error` — sanitized error string | null
+- `last_test_at` — last test timestamp if available
+- `next_action` — actionable next step
 
 ### GET /api/v1/settings/providers/debug
 
@@ -51,6 +53,10 @@ Detailed per-provider snapshot for dashboard diagnostics. Fields:
 **HuggingFace:**
 - `token_saved`, `token_source`, `decrypt_ok`
 - `required: false`
+
+**Pixabay:**
+- `key_saved`, `key_source`, `decrypt_ok`
+- `image_api_status`, `video_api_status`
 
 ## Provider Test Endpoints
 

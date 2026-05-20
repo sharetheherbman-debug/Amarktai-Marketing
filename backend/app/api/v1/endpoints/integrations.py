@@ -52,6 +52,7 @@ class IntegrationStatus(BaseModel):
     missing: list[str]
     status_label: str
     user_message: str
+    action_label: str
 
 class IntegrationUpdate(BaseModel):
     auto_post_enabled: bool = None
@@ -170,23 +171,24 @@ async def get_integrations(
         posting_supported = bool(state.get("posting_supported", False))
         can_post_now = bool(state.get("can_post_now", False))
         missing = list(state.get("missing", [])) if isinstance(state.get("missing", []), list) else []
+        computed_status = str(state.get("status") or "")
 
-        if can_post_now:
+        if computed_status == "oauth_app_not_configured" or not oauth_configured:
+            status_label = "OAuth app not configured"
+            user_message = "Content generation is available. Configure OAuth app credentials before connecting accounts."
+            action_label = "Configure OAuth app"
+        elif computed_status == "generation_only" or not posting_supported:
+            status_label = "Generation only"
+            user_message = str(platform_meta.get("user_message", "Content generation is available. Posting is not implemented yet."))
+            action_label = "Generation only"
+        elif can_post_now:
             status_label = "Ready to post"
             user_message = "OAuth and posting requirements are configured."
-            action_label = "Manage"
-        elif not oauth_configured:
-            status_label = "OAuth not configured"
-            user_message = str(platform_meta.get("user_message", "Content generation is available."))
-            action_label = "Configure OAuth"
-        elif not posting_supported:
-            status_label = "Generation only"
-            user_message = str(platform_meta.get("user_message", "Content generation is available."))
-            action_label = "Generate Content"
-        elif not bool(state.get("user_connected", False)):
-            status_label = "Posting not configured"
+            action_label = "Manage connection"
+        elif computed_status == "needs_connection" or not bool(state.get("user_connected", False)):
+            status_label = "Needs connection"
             user_message = "Content generation is available. Connect OAuth to enable posting."
-            action_label = "Connect Account"
+            action_label = "Connect account"
         else:
             status_label = "Limited mode"
             user_message = "Content generation is available. Complete posting requirements to publish."
@@ -213,6 +215,43 @@ async def get_integrations(
         })
 
     return result
+
+
+@router.delete("/{platform}")
+async def delete_platform_integration(
+    platform: str,
+    confirm: bool = False,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not confirm:
+        raise HTTPException(status_code=400, detail="Set confirm=true to remove this integration state.")
+    deleted = (
+        db.query(UserIntegration)
+        .filter(
+            UserIntegration.user_id == current_user.id,
+            UserIntegration.platform == platform,
+        )
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+    logger.info("Integration reset user=%s platform=%s deleted=%s", current_user.id, platform, deleted)
+    return {"platform": platform, "integrations_deleted": int(deleted)}
+
+
+@router.post("/reset-all")
+async def reset_all_integrations(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    deleted = (
+        db.query(UserIntegration)
+        .filter(UserIntegration.user_id == current_user.id)
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+    logger.info("Integration reset-all user=%s integrations_deleted=%s", current_user.id, deleted)
+    return {"integrations_deleted": int(deleted)}
 
 @router.get("/platforms/{platform}/connect")
 async def connect_platform(
