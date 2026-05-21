@@ -54,7 +54,13 @@ export function getStoredUser(): AuthUser | null {
 
 export function storeSession(token: string, user: AuthUser): void {
   localStorage.setItem(TOKEN_KEY, token);
-  localStorage.setItem(USER_KEY, JSON.stringify(user));
+  localStorage.setItem(USER_KEY, JSON.stringify({
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    isAdmin: user.isAdmin,
+    emailVerified: user.emailVerified,
+  } satisfies AuthUser));
 }
 
 export function clearSession(): void {
