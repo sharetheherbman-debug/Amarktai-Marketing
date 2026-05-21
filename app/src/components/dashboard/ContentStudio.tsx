@@ -30,7 +30,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { contentApi, webAppApi } from '@/lib/api';
 import { PLATFORM_CATALOG } from '@/lib/platformCatalog';
-import type { Content, ContentLibraryItem, Platform, WebApp } from '@/types';
+import type { ContentLibraryItem, Platform, WebApp } from '@/types';
 
 // ── Creation intent types ─────────────────────────────────────────────────────
 
@@ -279,10 +279,8 @@ function ProviderReadinessBanner() {
 
 export function ContentStudio({
   initialBusinessId,
-  onGenerated,
 }: {
   initialBusinessId?: string;
-  onGenerated?: (items: Content[]) => void;
 }) {
   // ── State ──
   const [businesses, setBusinesses] = useState<WebApp[]>([]);
@@ -739,7 +737,7 @@ export function ContentStudio({
                   <Button
                     onClick={async () => {
                       try {
-                        const saved = await contentApi.savePreview(String(previewResult.preview_id ?? ''));
+                        await contentApi.savePreview(String(previewResult.preview_id ?? ''));
                         setPreviewResult(null);
                         await refreshItems();
                         toast.success('Preview saved as a draft.');

@@ -6,16 +6,13 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { ContentStudio } from '@/components/dashboard/ContentStudio';
 import { webAppApi } from '@/lib/api';
-import type { Content, WebApp } from '@/types';
+import type { WebApp } from '@/types';
 
 export default function ContentPage() {
   const [searchParams] = useSearchParams();
   const initialBusinessId = searchParams.get('business') ?? undefined;
   const [businesses, setBusinesses] = useState<WebApp[]>([]);
   const [loading, setLoading] = useState(true);
-
-  // content state kept to pass onGenerated callback upstream
-  const [, setContent] = useState<Content[]>([]);
 
   const load = async () => {
     try {
@@ -76,10 +73,8 @@ export default function ContentPage() {
       ) : (
         <ContentStudio
           initialBusinessId={initialBusinessId}
-          onGenerated={(items) => setContent((current) => [...items, ...current])}
         />
       )}
     </div>
   );
 }
-

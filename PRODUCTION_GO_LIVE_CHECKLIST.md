@@ -1,0 +1,12 @@
+# PRODUCTION_GO_LIVE_CHECKLIST
+- [x] Canonical content orchestrator is active for preview/save/generate/improve/regenerate/pack flows.
+- [x] Preview is ephemeral and `POST /api/v1/content/preview/save` persists the selected draft.
+- [x] Structured outputs exist for ad campaign, short video, YouTube kit, talking avatar, image creative, and voiceover flows.
+- [x] GenX is treated as the premium multimodal provider with explicit model mapping state.
+- [x] Hugging Face is only used as task fallback and production placeholder media is disabled by default.
+- [x] Owner/admin access resolves to enterprise-equivalent unlimited access.
+- [x] Endpoint-based backend tests pass.
+- [x] Frontend production build passes.
+- [ ] Run live provider smoke checks with production GenX/Firecrawl/Pixabay credentials.
+- [ ] Archive or remove older superseded launch/checklist documents.
+- launch status: do not mark fully live until live provider smoke checks pass.

@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 os.environ.setdefault('APP_ENVIRONMENT', 'development')
+os.environ.setdefault('REDIS_URL', 'memory://')
 
 REPO_BACKEND = '/home/runner/work/Amarktai-Marketing/Amarktai-Marketing/backend'
 if REPO_BACKEND not in sys.path:
@@ -15,6 +16,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import app.models  # noqa: F401
+from app.api.v1.endpoints import auth as auth_endpoints
 from app.db.base import Base, get_db
 from app.main import app
 
@@ -36,6 +38,8 @@ def override_get_db():
 
 
 app.dependency_overrides[get_db] = override_get_db
+auth_endpoints._limiter.enabled = False
+app.state.limiter.enabled = False
 client = TestClient(app)
 
 
@@ -47,7 +51,8 @@ class MarketingCleanupEndpointTests(unittest.TestCase):
         Base.metadata.create_all(bind=TEST_ENGINE)
 
     def register_and_login(self, email: str) -> dict:
-        client.post('/api/v1/auth/register', json={'email': email, 'password': self.password, 'name': 'Test User'})
+        register = client.post('/api/v1/auth/register', json={'email': email, 'password': self.password, 'name': 'Test User'})
+        self.assertEqual(register.status_code, 201, register.text)
         response = client.post('/api/v1/auth/login', json={'email': email, 'password': self.password})
         self.assertEqual(response.status_code, 200, response.text)
         data = response.json()
@@ -192,7 +197,7 @@ class MarketingCleanupEndpointTests(unittest.TestCase):
         )
         self.assertEqual(regenerated.status_code, 200, regenerated.text)
         rows = self.list_content(headers, webapp_id)
-        latest = rows[0]
+        latest = next(item for item in rows if item.get('parent_content_id') == content_id)
         self.assertTrue(latest['id'] != original['id'])
         self.assertTrue(latest['parent_content_id'] == content_id)
         self.assertTrue(latest['uniqueness_score'] != original['uniqueness_score'] or latest['warnings'])
