@@ -101,4 +101,85 @@
 - [x] Tooling status endpoint added at `GET /api/v1/media/tooling/status`
 - [x] New gate scripts added for reset/platform-truth/preview-regeneration/pixabay
 
+## Final Go-Live Repair (Post PR #19)
+
+### Phase 1 — Fix providers/debug 500
+- [x] `backend/app/api/v1/endpoints/settings.py`: Added missing `pixabay_key, pixabay_source` resolution in `providers_debug`
+- [x] Removed duplicate `pixabay_key, pixabay_source` resolve line in `get_readiness`
+- [x] Each provider block (`genx`, `firecrawl`, `qwen`, `huggingface`, `pixabay`) wrapped in isolated try/except
+- [x] Provider exception returns `{"configured": false, "status": "provider_error", "error": "sanitized message"}`
+- [x] `GET /api/v1/settings/providers/debug` returns 200 JSON when all keys are missing
+- [x] `scripts/test_providers_debug_no_500.sh` added
+
+### Phase 2 — Content Studio product audit
+- [x] `MARKETING_CONTENT_STUDIO_PRODUCT_AUDIT.md` created — full UI element classification
+- [x] All UI elements classified: keep / move to Advanced details / move to Integrations / remove / placeholder / missing
+
+### Phase 3/4 — Rebuild Content Studio + hide backend clutter
+- [x] ContentStudio rebuilt as 5-step guided flow:
+  - Step 1: Business & Goal (business, objective, offer, tone, market, audience)
+  - Step 2: What to Create (9 creation intent cards)
+  - Step 3: Platforms (all 12, recommended preselection, select one/many/all)
+  - Step 4: Generate (summary, Generate Preview, Generate Full Pack)
+  - Step 5: Preview & Actions (human-friendly cards, Approve/Regenerate/Improve/Schedule/Reject/Delete)
+- [x] Content Library moved to collapsible "Drafts & Library" drawer
+- [x] "Recent generated content" section removed from `content/page.tsx`
+- [x] Raw `scrape_status` / `degraded` metadata badges removed from dashboard
+- [x] Backend debug fields hidden: `providerActual`, `modelActual`, `sourceAction`, `generatedBy`, `mediaJobIds`, `variationSeed`, scores, fallback chain
+- [x] "Advanced details" accordion added to each content card
+- [x] `scripts/test_dashboard_no_backend_clutter.sh` added
+
+### Phase 5 — Hashtag grounding
+- [x] `backend/app/services/hashtag_strategy.py` rewritten with full platform rules
+- [x] Banned: `#AmarktaiAI`, `#MarketingAutomation` (added to existing ban list)
+- [x] Platform rules: LinkedIn 3–5, Instagram 8–20, Reddit 0, TikTok 4–8, etc.
+- [x] `validate_hashtags()` helper — removes banned tags, sets `needs_review_hashtags`
+- [x] `scripts/test_hashtag_business_grounding.sh` added
+
+### Phase 6 — Campaign angle engine
+- [x] `backend/app/services/campaign_angle_engine.py` created
+- [x] 12 angles: problem/solution, social proof, offer/urgency, educational, myth-busting, behind-the-scenes, comparison, transformation, founder/story, objection handling, seasonal/local, product spotlight
+- [x] `select_angle()` — objective-driven, feedback-aware selection
+- [x] `angle_for_regenerate()` — always excludes previous angle
+- [x] `detect_duplicate_similarity()` — n-gram similarity, threshold 85%
+- [x] `scripts/test_content_variation_quality.sh` added
+
+### Phase 7 — Structured ad/video/avatar outputs
+- [x] `backend/app/services/content_quality_gate.py` expanded with 6 builders:
+  - `build_ad_campaign_structure()` — 3 hooks, headline, CTA, creative brief, placement
+  - `build_short_video_structure()` — scene-by-scene script, shot list, voiceover, thumbnail
+  - `build_youtube_kit_structure()` — titles, description, outline, chapters, Shorts cut
+  - `build_talking_avatar_structure()` — persona, script, delivery notes, captions
+  - `build_image_creative_structure()` — 3 concepts, Pixabay suggestions, aspect ratios
+  - `build_voiceover_structure()` — script, delivery notes, duration estimate
+- [x] All outputs complete and useful without media providers (script-ready fallback)
+- [x] No fake media URLs generated
+- [x] `scripts/test_ad_video_avatar_outputs.sh` added
+
+### Phase 9 — Provider readiness banner
+- [x] Provider readiness banner added to ContentStudio header (Text AI, Stock Assets, Posting)
+- [x] Links to Integrations
+
+### Phase 10 — Final proof gates
+- [x] `scripts/test_providers_debug_no_500.sh`
+- [x] `scripts/test_content_studio_user_flow.sh`
+- [x] `scripts/test_hashtag_business_grounding.sh`
+- [x] `scripts/test_content_variation_quality.sh`
+- [x] `scripts/test_ad_video_avatar_outputs.sh`
+- [x] `scripts/test_dashboard_no_backend_clutter.sh`
+- [x] `scripts/test_schedule_from_content_flow.sh`
+
+### Phase 11 — Reports
+- [x] `MARKETING_CONTENT_STUDIO_PRODUCT_AUDIT.md`
+- [x] `MARKETING_FRONTEND_BACKEND_SEPARATION_AUDIT.md`
+- [x] `MARKETING_CONTENT_QUALITY_AUDIT.md`
+- [x] `MARKETING_AD_VIDEO_AVATAR_FLOW_AUDIT.md`
+- [x] `MARKETING_HASHTAG_GROUNDING_AUDIT.md`
+- [x] `MARKETING_PRODUCTION_READY_CHECKLIST.md` (this file — updated)
+
+### Validation
+- [x] Backend compiles: `python3 -m compileall backend` passes
+- [x] Frontend builds: `cd app && npm run build` passes
+- [x] No Builder changes
+
 ## No Builder Changes ✅
