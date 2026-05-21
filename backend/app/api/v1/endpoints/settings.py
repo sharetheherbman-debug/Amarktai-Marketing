@@ -832,7 +832,6 @@ async def get_readiness(
     qwen_key, qwen_source = _resolve_provider_key(db, current_user.id, "QWEN_API_KEY", settings.QWEN_API_KEY)
     hf_token, hf_source = _resolve_provider_key(db, current_user.id, "HUGGINGFACE_TOKEN", settings.HUGGINGFACE_TOKEN)
     pixabay_key, pixabay_source = _resolve_provider_key(db, current_user.id, "PIXABAY_API_KEY", settings.PIXABAY_API_KEY)
-    pixabay_key, pixabay_source = _resolve_provider_key(db, current_user.id, "PIXABAY_API_KEY", settings.PIXABAY_API_KEY)
     genx_models = _configured_genx_models()
     genx_configured = bool(genx_key and settings.GENX_BASE_URL and genx_models["effective_default_model"])
     firecrawl_configured = bool(firecrawl_key)
@@ -1126,29 +1125,21 @@ async def providers_debug(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """Detailed provider diagnostic snapshot — no secrets returned."""
-    genx_key, genx_source = _resolve_provider_key(db, current_user.id, "GENX_API_KEY", settings.GENX_API_KEY)
-    firecrawl_key, firecrawl_source = _resolve_provider_key(db, current_user.id, "FIRECRAWL_API_KEY", settings.FIRECRAWL_API_KEY)
-    qwen_key, qwen_source = _resolve_provider_key(db, current_user.id, "QWEN_API_KEY", settings.QWEN_API_KEY)
-    hf_token, hf_source = _resolve_provider_key(db, current_user.id, "HUGGINGFACE_TOKEN", settings.HUGGINGFACE_TOKEN)
+    """Detailed provider diagnostic snapshot — no secrets returned.
 
-    genx_models_cfg = _configured_genx_models()
-    genx_model_mapping_present = bool(genx_models_cfg["effective_default_model"])
+    Each provider block is isolated so a single missing/broken key never
+    causes a 500.  Missing keys return structured status, not exceptions.
+    """
+    result: dict[str, Any] = {}
 
-    genx_ts = _GENX_LAST_TEST_STATE.get(current_user.id, {})
-    firecrawl_ts = _FIRECRAWL_LAST_TEST_STATE.get(current_user.id, {})
-
-    # Qwen catalog summary
-    qwen_catalog_available = False
+    # ── GenX ──────────────────────────────────────────────────────────────────
     try:
-        from app.services.qwen_model_catalog import qwen_full_catalog
-        cat = qwen_full_catalog()
-        qwen_catalog_available = bool(cat.get("by_category"))
-    except Exception:
-        qwen_catalog_available = False
-
-    return {
-        "genx": {
+        genx_key, genx_source = _resolve_provider_key(db, current_user.id, "GENX_API_KEY", settings.GENX_API_KEY)
+        genx_models_cfg = _configured_genx_models()
+        genx_model_mapping_present = bool(genx_models_cfg["effective_default_model"])
+        genx_ts = _GENX_LAST_TEST_STATE.get(current_user.id, {})
+        result["genx"] = {
+            "configured": genx_source != "missing",
             "key_saved": genx_source != "missing",
             "key_source": genx_source,
             "decrypt_ok": bool(genx_key) if genx_source == "user" else None,
@@ -1165,22 +1156,22 @@ async def providers_debug(
             "last_test_at": genx_ts.get("checked_at"),
             "last_test_error": genx_ts.get("error") or None,
             "last_error_classification": _classify_provider_error(str(genx_ts.get("error") or "")) if genx_ts.get("error") else None,
+            "status": "missing_key" if genx_source == "missing" else ("no_model" if not genx_model_mapping_present else "configured_not_tested"),
             "note": (
                 "Key missing — configure GENX_API_KEY" if genx_source == "missing"
                 else ("No model configured — set GENX_DEFAULT_MODEL or a task model" if not genx_model_mapping_present else None)
             ),
-        },
-        "qwen": {
-            "key_saved": qwen_source != "missing",
-            "key_source": qwen_source,
-            "decrypt_ok": bool(qwen_key) if qwen_source == "user" else None,
-            "catalog_available": qwen_catalog_available,
-            "default_budget_text_model": settings.QWEN_MODEL or None,
-            "budget_engine_available": bool(qwen_key),
-            "test_status": "fallback_available" if bool(qwen_key) else "optional_missing",
-            "note": "Qwen budget engine available" if bool(qwen_key) else "Add QWEN_API_KEY to enable Qwen fallback",
-        },
-        "firecrawl": {
+        }
+    except Exception as exc:
+        logger.warning("providers_debug genx block error: %s", exc)
+        result["genx"] = {"configured": False, "status": "provider_error", "error": _safe_preview(str(exc), 200)}
+
+    # ── Firecrawl ─────────────────────────────────────────────────────────────
+    try:
+        firecrawl_key, firecrawl_source = _resolve_provider_key(db, current_user.id, "FIRECRAWL_API_KEY", settings.FIRECRAWL_API_KEY)
+        firecrawl_ts = _FIRECRAWL_LAST_TEST_STATE.get(current_user.id, {})
+        result["firecrawl"] = {
+            "configured": firecrawl_source != "missing",
             "key_saved": firecrawl_source != "missing",
             "key_source": firecrawl_source,
             "decrypt_ok": bool(firecrawl_key) if firecrawl_source == "user" else None,
@@ -1190,24 +1181,74 @@ async def providers_debug(
             "last_test_at": firecrawl_ts.get("checked_at"),
             "last_test_error": firecrawl_ts.get("error") or None,
             "last_error_classification": _classify_provider_error(str(firecrawl_ts.get("error") or "")) if firecrawl_ts.get("error") else None,
+            "status": "missing_key" if firecrawl_source == "missing" else "configured_not_tested",
             "note": "Firecrawl key saved — test via POST /settings/firecrawl/debug-test" if bool(firecrawl_key) else "Add FIRECRAWL_API_KEY to enable web scraping",
-        },
-        "huggingface": {
+        }
+    except Exception as exc:
+        logger.warning("providers_debug firecrawl block error: %s", exc)
+        result["firecrawl"] = {"configured": False, "status": "provider_error", "error": _safe_preview(str(exc), 200)}
+
+    # ── Qwen ──────────────────────────────────────────────────────────────────
+    try:
+        qwen_key, qwen_source = _resolve_provider_key(db, current_user.id, "QWEN_API_KEY", settings.QWEN_API_KEY)
+        qwen_catalog_available = False
+        try:
+            from app.services.qwen_model_catalog import qwen_full_catalog
+            cat = qwen_full_catalog()
+            qwen_catalog_available = bool(cat.get("by_category"))
+        except Exception:
+            qwen_catalog_available = False
+        result["qwen"] = {
+            "configured": qwen_source != "missing",
+            "key_saved": qwen_source != "missing",
+            "key_source": qwen_source,
+            "decrypt_ok": bool(qwen_key) if qwen_source == "user" else None,
+            "catalog_available": qwen_catalog_available,
+            "default_budget_text_model": settings.QWEN_MODEL or None,
+            "budget_engine_available": bool(qwen_key),
+            "status": "fallback_available" if bool(qwen_key) else "optional_missing",
+            "test_status": "fallback_available" if bool(qwen_key) else "optional_missing",
+            "note": "Qwen budget engine available" if bool(qwen_key) else "Add QWEN_API_KEY to enable Qwen fallback",
+        }
+    except Exception as exc:
+        logger.warning("providers_debug qwen block error: %s", exc)
+        result["qwen"] = {"configured": False, "status": "provider_error", "error": _safe_preview(str(exc), 200)}
+
+    # ── HuggingFace ───────────────────────────────────────────────────────────
+    try:
+        hf_token, hf_source = _resolve_provider_key(db, current_user.id, "HUGGINGFACE_TOKEN", settings.HUGGINGFACE_TOKEN)
+        result["huggingface"] = {
+            "configured": hf_source != "missing",
             "token_saved": hf_source != "missing",
             "token_source": hf_source,
             "decrypt_ok": bool(hf_token) if hf_source == "user" else None,
             "required": False,
+            "status": "fallback_available" if bool(hf_token) else "optional_missing",
             "task_status": "fallback_available" if bool(hf_token) else "optional_missing",
             "note": "HF token saved — optional fallback provider" if bool(hf_token) else "HF token optional — add HUGGINGFACE_TOKEN to enable HF tasks",
-        },
-        "pixabay": {
+        }
+    except Exception as exc:
+        logger.warning("providers_debug huggingface block error: %s", exc)
+        result["huggingface"] = {"configured": False, "status": "provider_error", "error": _safe_preview(str(exc), 200)}
+
+    # ── Pixabay ───────────────────────────────────────────────────────────────
+    try:
+        pixabay_key, pixabay_source = _resolve_provider_key(db, current_user.id, "PIXABAY_API_KEY", settings.PIXABAY_API_KEY)
+        result["pixabay"] = {
+            "configured": pixabay_source != "missing",
             "key_saved": pixabay_source != "missing",
             "key_source": pixabay_source,
             "decrypt_ok": bool(pixabay_key) if pixabay_source == "user" else None,
+            "status": "configured_not_tested" if bool(pixabay_key) else "missing_key",
             "image_api_status": "configured_not_tested" if bool(pixabay_key) else "missing_key",
             "video_api_status": "configured_not_tested" if bool(pixabay_key) else "missing_key",
-        },
-    }
+            "note": "Pixabay key saved." if bool(pixabay_key) else "Add PIXABAY_API_KEY for stock asset search.",
+        }
+    except Exception as exc:
+        logger.warning("providers_debug pixabay block error: %s", exc)
+        result["pixabay"] = {"configured": False, "status": "provider_error", "error": _safe_preview(str(exc), 200)}
+
+    return result
 
 
 async def genx_debug_test(

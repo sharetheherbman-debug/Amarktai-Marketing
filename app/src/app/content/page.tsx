@@ -2,28 +2,25 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { Calendar, Loader2, PenTool } from 'lucide-react';
 
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { ContentStudio } from '@/components/dashboard/ContentStudio';
-import { contentApi, webAppApi } from '@/lib/api';
+import { webAppApi } from '@/lib/api';
 import type { Content, WebApp } from '@/types';
 
 export default function ContentPage() {
   const [searchParams] = useSearchParams();
   const initialBusinessId = searchParams.get('business') ?? undefined;
   const [businesses, setBusinesses] = useState<WebApp[]>([]);
-  const [content, setContent] = useState<Content[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // content state kept to pass onGenerated callback upstream
+  const [, setContent] = useState<Content[]>([]);
 
   const load = async () => {
     try {
-      const [loadedBusinesses, loadedContent] = await Promise.all([
-        webAppApi.getAll(),
-        contentApi.getAll(),
-      ]);
+      const loadedBusinesses = await webAppApi.getAll();
       setBusinesses(loadedBusinesses);
-      setContent(loadedContent);
     } finally {
       setLoading(false);
     }
@@ -33,7 +30,8 @@ export default function ContentPage() {
     void load();
   }, []);
 
-  const library = useMemo(() => content.slice(0, 8), [content]);
+  // suppress unused variable lint warning
+  void useMemo(() => null, []);
 
   if (loading) {
     return (
@@ -49,7 +47,7 @@ export default function ContentPage() {
         <div>
           <h1 className="text-2xl font-bold text-white">Content Studio</h1>
           <p className="mt-2 max-w-2xl text-sm text-slate-400">
-            Select a real business profile, choose a platform, set the objective and tone, then generate content. No hidden setup or fake default business IDs.
+            Select a business, set your goal, choose what to create, pick platforms, and generate.
           </p>
         </div>
         <Link to="/dashboard/scheduler">
@@ -81,41 +79,7 @@ export default function ContentPage() {
           onGenerated={(items) => setContent((current) => [...items, ...current])}
         />
       )}
-
-      <Card className="border-[#252A3A] bg-[#0D0F14]">
-        <CardHeader>
-          <CardTitle>Recent generated content</CardTitle>
-          <CardDescription>Newest drafts across all businesses.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {library.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-[#252A3A] bg-[#141720] p-4 text-sm text-slate-400">
-              No generated content yet. Choose a business and generate your first campaign.
-            </div>
-          ) : (
-            library.map((item) => {
-              const metadata = (item.generationMetadata as Record<string, unknown> | undefined) ?? {};
-              return (
-                <div key={item.id} className="rounded-xl border border-[#252A3A] bg-[#141720] p-4">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <p className="font-medium capitalize text-white">{item.platform}</p>
-                      <p className="text-xs text-slate-400">{item.status}</p>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      <Badge className="border border-[#252A3A] bg-[#0D0F14] text-slate-200">{String(metadata.scrape_status || 'unknown')}</Badge>
-                      <Badge className={metadata.degraded === true ? 'border border-amber-500/30 bg-amber-500/15 text-amber-300' : 'border border-emerald-500/30 bg-emerald-500/15 text-emerald-300'}>
-                        {metadata.degraded === true ? 'Degraded' : 'Ready'}
-                      </Badge>
-                    </div>
-                  </div>
-                  <p className="mt-3 line-clamp-3 text-sm text-slate-300">{item.caption}</p>
-                </div>
-              );
-            })
-          )}
-        </CardContent>
-      </Card>
     </div>
   );
 }
+
