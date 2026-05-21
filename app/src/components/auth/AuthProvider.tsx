@@ -17,6 +17,8 @@ interface TokenResponse {
   name?: string | null;
   is_admin?: boolean;
   email_verified?: boolean;
+  effective_plan?: string;
+  billing_enabled?: boolean;
 }
 
 export default function AuthProvider({ children }: { children: ReactNode }) {
@@ -64,7 +66,7 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     });
-    const u: AuthUser = { id: data.user_id, email: data.email, name: data.name, isAdmin: data.is_admin, emailVerified: data.email_verified };
+    const u: AuthUser = { id: data.user_id, email: data.email, name: data.name, isAdmin: data.is_admin, emailVerified: data.email_verified, effectivePlan: data.effective_plan, billingEnabled: data.billing_enabled };
     storeSession(data.access_token, u);
     setToken(data.access_token);
     setUser(u);
@@ -75,7 +77,7 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
       method: 'POST',
       body: JSON.stringify({ email, password, name: name || undefined }),
     });
-    const u: AuthUser = { id: data.user_id, email: data.email, name: data.name, isAdmin: data.is_admin, emailVerified: data.email_verified };
+    const u: AuthUser = { id: data.user_id, email: data.email, name: data.name, isAdmin: data.is_admin, emailVerified: data.email_verified, effectivePlan: data.effective_plan, billingEnabled: data.billing_enabled };
     storeSession(data.access_token, u);
     setToken(data.access_token);
     setUser(u);

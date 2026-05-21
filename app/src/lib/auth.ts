@@ -16,6 +16,8 @@ export interface AuthUser {
   name?: string | null;
   isAdmin?: boolean;
   emailVerified?: boolean;
+  effectivePlan?: string;
+  billingEnabled?: boolean;
 }
 
 export interface AuthState {

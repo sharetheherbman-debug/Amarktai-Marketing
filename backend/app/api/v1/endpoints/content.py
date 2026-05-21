@@ -93,6 +93,10 @@ class RegenerateContentRequest(BaseModel):
     variation_seed: str | None = None
 
 
+class PreviewSaveRequest(BaseModel):
+    preview_id: str
+
+
 class RejectItemRequest(BaseModel):
     reason: str | None = None
     feedback: str | None = None
@@ -800,21 +804,21 @@ async def improve_content_item(
     db: Session = Depends(get_db),
     current_user: User = Depends(enforce_content_quota),
 ):
+    from app.services.content_orchestrator import ContentOrchestrator
+
     content = db.query(ContentModel).filter(
         ContentModel.id == content_id,
         ContentModel.user_id == current_user.id,
     ).first()
     if not content:
         raise HTTPException(status_code=404, detail="Content not found")
-    improved = await generate_content(
-        webapp_id=content.webapp_id,
-        platform=content.platform,
+    improved = await ContentOrchestrator(db, current_user).improve(
+        content,
         objective=payload.objective,
         tone=payload.tone,
         audience=payload.audience,
+        offer=payload.offer,
         product_focus=payload.product_focus or payload.offer or None,
-        db=db,
-        current_user=current_user,
     )
     metadata = dict(improved.generation_metadata or {})
     metadata["improved_from"] = content.id
@@ -833,6 +837,8 @@ async def regenerate_content_item(
     db: Session = Depends(get_db),
     current_user: User = Depends(enforce_content_quota),
 ):
+    from app.services.content_orchestrator import ContentOrchestrator
+
     content = db.query(ContentModel).filter(
         ContentModel.id == content_id,
         ContentModel.user_id == current_user.id,
@@ -841,12 +847,10 @@ async def regenerate_content_item(
         raise HTTPException(status_code=404, detail="Content not found")
     prior_metadata = dict(content.generation_metadata or {})
     feedback = (payload.feedback or "").strip()
-    improved = await generate_content(
-        webapp_id=content.webapp_id,
-        platform=content.platform,
-        objective=feedback or None,
-        db=db,
-        current_user=current_user,
+    improved = await ContentOrchestrator(db, current_user).regenerate(
+        content,
+        feedback=feedback or None,
+        variation_seed=payload.variation_seed,
     )
     metadata = dict(improved.generation_metadata or {})
     avoid_list = [content.caption, *payload.avoid_previous_text]
@@ -881,18 +885,33 @@ async def preview_content_item(
     db: Session = Depends(get_db),
     current_user: User = Depends(enforce_content_quota),
 ):
-    generated = await generate_creative(payload=payload, db=db, current_user=current_user)
-    content_id = generated.get("content_id")
-    item = None
-    if content_id:
-        row = db.query(ContentModel).filter(ContentModel.id == content_id, ContentModel.user_id == current_user.id).first()
-        if row:
-            item = _content_item_payload(row)
-    return {
-        "status": "preview_ready",
-        "content_id": content_id,
-        "preview": item or generated,
-    }
+    from app.services.content_orchestrator import ContentOrchestrator, OrchestratorRequest
+
+    return await ContentOrchestrator(db, current_user).preview(
+        OrchestratorRequest(
+            action="preview",
+            webapp_id=payload.webapp_id,
+            platform=payload.platform,
+            fmt=payload.format,
+            objective=payload.objective,
+            tone=payload.tone,
+            audience=payload.audience,
+            offer=payload.offer,
+            product_focus=payload.product_focus,
+        )
+    )
+
+
+@router.post("/preview/save")
+async def save_preview_content_item(
+    payload: PreviewSaveRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(enforce_content_quota),
+):
+    from app.services.content_orchestrator import ContentOrchestrator
+
+    saved = await ContentOrchestrator(db, current_user).save_preview(payload.preview_id)
+    return _content_item_payload(saved)
 
 
 @router.post("/items/{content_id}/review-grounding")
@@ -1014,217 +1033,25 @@ async def generate_content(
     db: Session = Depends(get_db),
     current_user: User = Depends(enforce_content_quota),
 ):
-    """Generate AI content (text + image/video). Falls back to templates if no AI key configured."""
-    from app.models.webapp import WebApp
-    from app.services.media_service import get_media_url, VIDEO_PLATFORMS
-    from app.services.business_grounding import build_business_grounding_context, score_business_grounding
-    from app.services.hashtag_strategy import build_hashtag_strategy
-    from app.services.content_quality_gate import evaluate_quality_gate
+    from app.services.content_orchestrator import ContentOrchestrator, OrchestratorRequest
 
-    platform = normalize_catalog_platform(platform)
-    if platform not in launch_platforms():
-        raise HTTPException(status_code=422, detail=f"Unsupported platform '{platform}'")
-
-    webapp = db.query(WebApp).filter(WebApp.id == webapp_id, WebApp.user_id == current_user.id).first()
-    if not webapp:
-        raise HTTPException(status_code=404, detail="Web app not found")
-
-    hf_token = _get_hf_token(db, current_user)
-    openai_key = _get_openai_key(db, current_user)
-    qwen_key = _get_qwen_key(db, current_user)
-    genx_key = _get_genx_key(db, current_user)
-    firecrawl_key = _get_firecrawl_key(db, current_user)
-
-    intelligence = _extract_intelligence(webapp)
-    if webapp.url and not intelligence:
-        try:
-            intelligence = await analyze_business(
-                url=webapp.url,
-                name=webapp.name,
-                description=webapp.description,
-                firecrawl_api_key=firecrawl_key,
-                timeout=25,
-            )
-            webapp.scraped_data = intelligence
-            db.commit()
-        except Exception:
-            intelligence = {"scrape_status": "failed", "source_provider": "manual", "warnings": ["Website analysis failed; using manual profile data."]}
-
-    webapp_data = {
-        "name": webapp.name or intelligence.get("business_name") or "Business",
-        "url": str(webapp.url or intelligence.get("normalized_url") or ""),
-        "description": webapp.description or intelligence.get("page_summary") or "",
-        "summary": intelligence.get("page_summary") or "",
-        "category": webapp.category or "",
-        "target_audience": audience or webapp.target_audience or intelligence.get("target_audience_guess") or "",
-        "key_features": webapp.key_features or intelligence.get("products_services") or [],
-        "products_services": intelligence.get("products_services") or webapp.key_features or [],
-        "keywords": intelligence.get("keywords") or [],
-        "market_location": getattr(webapp, "market_location", "") or "",
-        "brand_voice": getattr(webapp, "brand_voice", "") or "",
-        "social_links": intelligence.get("social_links") or [],
-    }
-    effective_product_focus = product_focus or offer or None
-    if effective_product_focus:
-        webapp_data["products_services"] = [effective_product_focus, *list(webapp_data.get("products_services") or [])][:5]
-    if campaign_type:
-        webapp_data["campaign_type"] = campaign_type
-    if objective:
-        webapp_data["objective"] = objective
-    if tone:
-        webapp_data["tone"] = tone
-    grounding_context = build_business_grounding_context(webapp_data)
-    webapp_data["description"] = f"{grounding_context['prompt_prefix']} {webapp_data['description']}".strip()
-
-    # Snapshot of the business used at generation time (provenance)
-    source_business_snapshot = {
-        "id": webapp.id,
-        "name": webapp.name or "",
-        "url": str(webapp.url or ""),
-        "description": webapp.description or "",
-        "category": webapp.category or "",
-        "target_audience": webapp_data["target_audience"],
-        "products_services": webapp_data["products_services"],
-        "market_location": webapp_data.get("market_location", ""),
-        "brand_voice": webapp_data.get("brand_voice", ""),
-    }
-
-    generation_warnings = list(intelligence.get("warnings") or [])
-    result = {}
-    genx_failed = False
-    try:
-        result = await _generate_text_content(webapp_data, platform, hf_token, openai_key, qwen_key, genx_key)
-    except Exception as exc:
-        genx_failed = True
-        generation_warnings.append("AI generation failed; fallback content was used.")
-        result = {}
-    if not result.get("caption"):
-        genx_failed = True
-        result = _template_from_intelligence(
-            webapp_data,
-            platform,
+    fmt = "text_post"
+    if campaign_type in {"ad_campaign", "short_video", "youtube_kit", "talking_avatar", "image_creative", "voiceover"}:
+        fmt = campaign_type
+    content = await ContentOrchestrator(db, current_user).generate(
+        OrchestratorRequest(
+            action="generate",
+            webapp_id=webapp_id,
+            platform=platform,
+            fmt=fmt,
             objective=objective,
             tone=tone,
-            include_hashtags=include_hashtags,
-            include_cta=include_cta,
+            audience=audience,
+            offer=offer,
+            product_focus=product_focus,
         )
-
-    # Filter banned system hashtags from result
-    hashtag_strategy = build_hashtag_strategy(webapp_data, platform)
-    merged_hashtags = result.get("hashtags", []) or hashtag_strategy["hashtags"]
-    if hashtag_strategy["hashtags"]:
-        merged_hashtags = list(dict.fromkeys([*hashtag_strategy["hashtags"], *merged_hashtags]))
-    result["hashtags"] = _filter_hashtags(merged_hashtags, business_name=webapp.name or "")
-
-    media_urls = await get_media_url(platform, webapp_data, qwen_key or hf_token)
-    content_type = "video" if platform in VIDEO_PLATFORMS else "image"
-    genx_configured = bool(genx_key)
-    provider_attempted = "genx" if genx_key else ("qwen" if qwen_key else ("huggingface" if hf_token else "template"))
-    provider_name = result.get("provider") or ("template" if genx_failed else provider_attempted)
-    generation_status = (
-        "genx_success"
-        if provider_name == "genx"
-        else ("genx_failed_fallback_used" if genx_configured and provider_name != "template" else ("template_fallback" if provider_name == "template" else "fallback_provider_success"))
     )
-    generation_message = "Generation completed"
-    if generation_status != "genx_success":
-        generation_message = "Generated in degraded mode; review before posting."
-    platform_review = {
-        "platform_fit_score": 78 if generation_status != "genx_success" else 86,
-        "algorithm_fit_suggestions": ["Prefer platform-native formatting and hooks."],
-        "terms_policy_warnings": [],
-        "customer_conversion_suggestions": ["Use clear CTA and audience-specific value proposition."],
-        "follower_growth_suggestions": ["Iterate hooks and posting cadence from performance data."],
-    }
-
-    logger.info(
-        "generate_content user=%s webapp=%s platform=%s provider=%s",
-        current_user.id, webapp_id, platform, provider_name,
-    )
-    grounding_review = score_business_grounding(result.get("caption", ""), webapp_data)
-    quality_gate = evaluate_quality_gate(
-        business_grounding_score=int(grounding_review["business_grounding_score"]),
-        hashtag_relevance_score=int(hashtag_strategy["hashtag_relevance_score"]),
-    )
-    recent_rows = (
-        db.query(ContentModel)
-        .filter(
-            ContentModel.user_id == current_user.id,
-            ContentModel.webapp_id == webapp_id,
-            ContentModel.platform == platform,
-        )
-        .order_by(ContentModel.created_at.desc())
-        .limit(6)
-        .all()
-    )
-    similarities = [_similarity(str(result.get("caption", "")), str(row.caption or "")) for row in recent_rows]
-    max_similarity = max(similarities) if similarities else 0.0
-    uniqueness_score = int(max(0, min(100, round((1 - max_similarity) * 100))))
-    variation_seed = str(uuid.uuid4())
-    duplicate_warning = "Possible duplicate copy detected; review before publishing." if max_similarity >= 0.9 else ""
-
-    db_content = ContentModel(
-        id=str(uuid.uuid4()),
-        user_id=current_user.id,
-        webapp_id=webapp_id,
-        platform=platform,
-        type=content_type,
-        status=ContentStatus.PENDING,
-        title=result.get("title", "Generated Content"),
-        caption=result.get("caption", ""),
-        hashtags=result.get("hashtags", []),
-        media_urls=media_urls,
-        generation_metadata={
-            **_generation_package(platform, result, provider_name, "configured" if genx_configured else "not_configured", generation_message, genx_configured),
-            **_truthful_generation_metadata(
-                provider_attempted=provider_attempted,
-                provider_actual=provider_name,
-                model_attempted=(settings.GENX_DEFAULT_MODEL if provider_attempted == "genx" else (settings.QWEN_MODEL if provider_attempted == "qwen" else "template")),
-                model_actual=result.get("model", ""),
-                task_used="text-generation",
-                capability_used="platform_copy",
-                generation_status=generation_status,
-                degraded=generation_status != "genx_success",
-                reason=("GenX model invalid/not found; fallback provider used." if genx_configured and provider_name != "genx" else ""),
-                missing_capabilities=[],
-                asset_generation_status="generated" if media_urls else "prompt_or_script_only",
-                scrape_provider=intelligence.get("source_provider", "manual"),
-                scrape_status=intelligence.get("scrape_status", "failed"),
-                platform_review=platform_review,
-            ),
-            "source_route": "/content/generate",
-            "source_action": "single_generate",
-            "source_business_snapshot": source_business_snapshot,
-            "business_name": webapp.name or "",
-            "provider_actual": provider_name,
-            "provider_attempted": provider_attempted,
-            "generation_status": generation_status,
-            "scrape_provider": intelligence.get("source_provider", "manual"),
-            "scrape_status": intelligence.get("scrape_status", "failed"),
-            "warnings": generation_warnings,
-            "preview_title": result.get("title", "Generated Content"),
-            "preview_summary": str(result.get("caption", ""))[:220],
-            "hooks": [str(result.get("caption", "")).split("\n", 1)[0][:120]] if result.get("caption") else [],
-            "fallback_chain": [provider_attempted, provider_name, "template"],
-            "variation_seed": variation_seed,
-            "uniqueness_score": uniqueness_score,
-            "degraded": generation_status != "genx_success",
-            "model": result.get("model", ""),
-            "business_grounding_score": grounding_review["business_grounding_score"],
-            "hashtag_relevance_score": hashtag_strategy["hashtag_relevance_score"],
-            "creative_relevance_score": grounding_review["business_grounding_score"],
-            "quality_gate": quality_gate["status"],
-            "quality_gate_issues": quality_gate["issues"],
-            "needs_review_duplicate": max_similarity >= 0.9,
-            "parent_content_id": None,
-        },
-    )
-    if duplicate_warning:
-        db_content.generation_metadata["warnings"] = [*generation_warnings, duplicate_warning]
-    db.add(db_content)
-    db.commit()
-    db.refresh(db_content)
-    return db_content
+    return content
 
 
 @router.post("/generate-all")
@@ -1288,263 +1115,38 @@ async def generate_creative(
     db: Session = Depends(get_db),
     current_user: User = Depends(enforce_content_quota),
 ):
-    from app.models.webapp import WebApp
-    from app.services.platform_format_strategy import select_formats
-    from app.services.media_generation import (
-        generate_image_asset,
-        generate_image_prompt,
-        generate_video_script,
-        generate_short_video_brief,
-        generate_youtube_kit,
-        generate_tiktok_reels_kit,
-        generate_voiceover_script,
-        generate_talking_avatar_script,
-        generate_talking_avatar_video,
-        generate_thumbnail_prompt,
-        generate_carousel_outline,
-    )
-    from app.services.platform_intelligence import review_content
-    from app.services.business_grounding import build_business_grounding_context, score_business_grounding
-    from app.services.content_quality_gate import evaluate_quality_gate
-    from app.services.creative_brief_builder import score_creative_relevance
+    from app.services.content_orchestrator import ContentOrchestrator, OrchestratorRequest
 
-    webapp = db.query(WebApp).filter(WebApp.id == payload.webapp_id, WebApp.user_id == current_user.id).first()
-    if not webapp:
-        raise HTTPException(status_code=404, detail="Web app not found")
-
-    hf_token = _get_hf_token(db, current_user)
-    qwen_key = _get_qwen_key(db, current_user)
-    openai_key = _get_openai_key(db, current_user)
-    genx_key = _get_genx_key(db, current_user)
-    strategy = select_formats(payload.platform, requested_format=payload.format, auto_select=payload.auto_select_format)
-    selected_format = strategy["formats"][0]
-    effective_product_focus = payload.product_focus or payload.offer or None
-    webapp_data = {
-        "name": webapp.name or "",
-        "description": webapp.description or "",
-        "category": getattr(webapp, "category", "") or "",
-        "target_audience": payload.audience or getattr(webapp, "target_audience", "") or "",
-        "objective": payload.objective or "",
-        "tone": payload.tone or "",
-        "key_features": webapp.key_features or [],
-        "products_services": webapp.key_features or [],
-        "market_location": getattr(webapp, "market_location", "") or "",
-        "brand_voice": getattr(webapp, "brand_voice", "") or "",
-    }
-    if effective_product_focus:
-        webapp_data["products_services"] = [effective_product_focus, *list(webapp_data.get("products_services") or [])][:5]
-    source_business_snapshot = {
-        "id": webapp.id,
-        "name": webapp.name or "",
-        "url": str(getattr(webapp, "url", "") or ""),
-        "description": webapp.description or "",
-        "category": getattr(webapp, "category", "") or "",
-        "target_audience": webapp_data["target_audience"],
-        "products_services": webapp_data["products_services"],
-        "market_location": webapp_data.get("market_location", ""),
-        "brand_voice": webapp_data.get("brand_voice", ""),
-    }
-    grounding_context = build_business_grounding_context(webapp_data)
-    webapp_data["description"] = f"{grounding_context['prompt_prefix']} {webapp_data['description']}".strip()
-
-    result: dict[str, object] = {
-        "platform": normalize_catalog_platform(payload.platform),
-        "format": selected_format,
-        "image_url": None,
-        "video_url": None,
-        "avatar_url": None,
-    }
-    provider_actual = "template"
-    model_or_task = selected_format
-    persisted_content_id: str | None = None
-    if selected_format in {"image_prompt", "generated_image"}:
-        image_prompt = await generate_image_prompt(webapp_data, payload.platform, qwen_key=qwen_key, hf_token=hf_token, openai_key=openai_key, genx_key=genx_key)
-        result["image_prompt"] = image_prompt["image_prompt"]
-        provider_actual = image_prompt["provider"]
-        if selected_format == "generated_image":
-            image_asset = await generate_image_asset(image_prompt=result["image_prompt"], hf_token=hf_token)
-            result["image_url"] = image_asset["image_url"]
-            result["asset_generation_status"] = image_asset["asset_generation_status"]
-    elif selected_format in {"short_video_brief", "video_script"}:
-        if selected_format == "short_video_brief":
-            brief = await generate_short_video_brief(webapp_data, payload.platform, qwen_key=qwen_key, hf_token=hf_token, openai_key=openai_key, genx_key=genx_key)
-            result["video_script"] = brief["video_script"]
-            result["shot_list"] = brief["shot_list"]
-            provider_actual = brief["provider"]
-        else:
-            script = await generate_video_script(webapp_data, payload.platform, qwen_key=qwen_key, hf_token=hf_token, openai_key=openai_key, genx_key=genx_key)
-            result["video_script"] = script["video_script"]
-            provider_actual = script["provider"]
-        result["asset_generation_status"] = "prompt_or_script_only"
-    elif selected_format == "youtube_video_kit":
-        kit = await generate_youtube_kit(webapp_data, qwen_key=qwen_key, hf_token=hf_token, openai_key=openai_key, genx_key=genx_key)
-        result.update(kit)
-        provider_actual = kit["provider"]
-        result["asset_generation_status"] = "prompt_or_script_only"
-    elif selected_format == "tiktok_reels_kit":
-        kit = await generate_tiktok_reels_kit(webapp_data, qwen_key=qwen_key, hf_token=hf_token, openai_key=openai_key, genx_key=genx_key)
-        result.update(kit)
-        provider_actual = kit["provider"]
-        result["asset_generation_status"] = "prompt_or_script_only"
-    elif selected_format == "voiceover_script":
-        voice = await generate_voiceover_script(webapp_data, qwen_key=qwen_key, hf_token=hf_token, openai_key=openai_key, genx_key=genx_key)
-        result.update(voice)
-        provider_actual = voice["provider"]
-        result["asset_generation_status"] = "prompt_or_script_only"
-    elif selected_format in {"talking_avatar_script", "talking_avatar_video"}:
-        avatar_script = await generate_talking_avatar_script(webapp_data, qwen_key=qwen_key, hf_token=hf_token, openai_key=openai_key, genx_key=genx_key)
-        result.update(avatar_script)
-        provider_actual = avatar_script["provider"]
-        if selected_format == "talking_avatar_video":
-            avatar_video = await generate_talking_avatar_video(avatar_script=result["avatar_script"], hf_token=hf_token)
-            result["avatar_url"] = avatar_video["avatar_url"]
-            result["asset_generation_status"] = avatar_video["asset_generation_status"]
-        else:
-            result["asset_generation_status"] = "prompt_or_script_only"
-    elif selected_format == "thumbnail_prompt":
-        thumbnail = await generate_thumbnail_prompt(webapp_data, qwen_key=qwen_key, hf_token=hf_token, openai_key=openai_key, genx_key=genx_key)
-        result.update(thumbnail)
-        provider_actual = thumbnail["provider"]
-        result["asset_generation_status"] = "prompt_or_script_only"
-    elif selected_format == "carousel":
-        carousel = await generate_carousel_outline(webapp_data, qwen_key=qwen_key, hf_token=hf_token, openai_key=openai_key, genx_key=genx_key)
-        result.update(carousel)
-        provider_actual = carousel["provider"]
-        result["asset_generation_status"] = "prompt_or_script_only"
-    else:
-        generated = await generate_content(
+    content = await ContentOrchestrator(db, current_user).generate(
+        OrchestratorRequest(
+            action="generate",
             webapp_id=payload.webapp_id,
             platform=payload.platform,
+            fmt=payload.format,
             objective=payload.objective,
             tone=payload.tone,
             audience=payload.audience,
-            db=db,
-            current_user=current_user,
+            offer=payload.offer,
+            product_focus=payload.product_focus,
         )
-        metadata = generated.generation_metadata or {}
-        result.update({"text": generated.caption, "hashtags": generated.hashtags, "asset_generation_status": metadata.get("asset_generation_status", "prompt_or_script_only")})
-        provider_actual = str(metadata.get("provider_actual", "template"))
-        model_or_task = str(metadata.get("model_actual", metadata.get("model", "text-generation")))
-        persisted_content_id = generated.id
-
-    content_for_review = result.get("text") or result.get("video_script") or result.get("avatar_script") or result.get("image_prompt") or ""
-    platform_review = review_content(platform=payload.platform, content=str(content_for_review))
-    grounding_review = score_business_grounding(str(content_for_review), webapp_data)
-    creative_review = score_creative_relevance(
-        str(content_for_review),
-        str(result.get("image_prompt") or result.get("thumbnail_prompt") or ""),
-        webapp_data,
     )
-    quality_gate = evaluate_quality_gate(
-        business_grounding_score=int(grounding_review["business_grounding_score"]),
-        hashtag_relevance_score=80,
-        creative_relevance_score=int(creative_review["creative_relevance_score"]),
-    )
-    recent_rows = (
-        db.query(ContentModel)
-        .filter(
-            ContentModel.user_id == current_user.id,
-            ContentModel.webapp_id == payload.webapp_id,
-            ContentModel.platform == normalize_catalog_platform(payload.platform),
-        )
-        .order_by(ContentModel.created_at.desc())
-        .limit(6)
-        .all()
-    )
-    content_text_value = str(content_for_review)
-    similarities = [_similarity(content_text_value, str(row.caption or "")) for row in recent_rows]
-    max_similarity = max(similarities) if similarities else 0.0
-    uniqueness_score = int(max(0, min(100, round((1 - max_similarity) * 100))))
-    variation_seed = str(uuid.uuid4())
-    generation_status = "genx_failed_qwen_fallback" if genx_key and provider_actual == "qwen" else ("success" if provider_actual != "template" else "template_fallback")
-    degraded = generation_status != "success"
-    generation_metadata = {
-        "format": selected_format,
-        "source_route": "/content/generate-creative",
-        "source_action": "creative_generate",
-        "source_business_snapshot": source_business_snapshot,
-        "business_name": webapp.name or "",
-        "provider_attempted": "genx" if genx_key else ("qwen" if qwen_key else ("huggingface" if hf_token else "template")),
-        "provider_actual": provider_actual,
-        "model_actual": model_or_task,
-        "task_used": selected_format,
-        "capability_used": selected_format,
-        "generation_status": generation_status,
-        "degraded": degraded,
-        "reason": "" if not degraded else "Provider fallback or template output used.",
-        "asset_generation_status": result.get("asset_generation_status", "prompt_or_script_only"),
-        "image_prompt": result.get("image_prompt"),
-        "video_script": result.get("video_script"),
-        "shot_list": result.get("shot_list"),
-        "voiceover_script": result.get("voiceover_script"),
-        "avatar_script": result.get("avatar_script"),
-        "thumbnail_prompt": result.get("thumbnail_prompt"),
-        "carousel_slides": result.get("carousel_slides"),
-        "platform_fit_score": platform_review["platform_fit_score"],
-        "terms_policy_warnings": platform_review["terms_policy_warnings"],
-        "media_job_ids": result.get("media_job_ids", []),
-        "media_asset_ids": result.get("media_asset_ids", []),
-        "warnings": platform_review["risks"],
-        "preview_title": str(result.get("title") or f"{webapp.name or 'Business'} • {payload.platform.title()}"),
-        "preview_summary": content_text_value[:220],
-        "hooks": [content_text_value.split("\n", 1)[0][:120]] if content_text_value else [],
-        "variation_seed": variation_seed,
-        "uniqueness_score": uniqueness_score,
-        "fallback_chain": ["genx", "qwen", "huggingface", "template"],
-        "cta": result.get("cta"),
-        "business_grounding_score": grounding_review["business_grounding_score"],
-        "creative_relevance_score": creative_review["creative_relevance_score"],
-        "quality_gate": quality_gate["status"],
-        "quality_gate_issues": quality_gate["issues"],
-        "needs_review_duplicate": max_similarity >= 0.9,
-        "parent_content_id": None,
-    }
-    media_urls = [str(url) for url in [result.get("image_url"), result.get("video_url"), result.get("avatar_url")] if isinstance(url, str) and url]
-    hashtags = _filter_hashtags(_safe_list(result.get("hashtags")), business_name=webapp.name or "")
-    if persisted_content_id is None:
-        db_content = ContentModel(
-            id=str(uuid.uuid4()),
-            user_id=current_user.id,
-            webapp_id=payload.webapp_id,
-            platform=normalize_catalog_platform(payload.platform),
-            type=_content_type_for_format(selected_format),
-            status=ContentStatus.PENDING,
-            title=str(result.get("title") or f"{webapp.name or 'Business'} • {payload.platform.title()}"),
-            caption=str(content_for_review),
-            hashtags=hashtags,
-            media_urls=media_urls,
-            generation_metadata=generation_metadata,
-        )
-        db.add(db_content)
-        db.commit()
-        db.refresh(db_content)
-        persisted_content_id = db_content.id
-    else:
-        existing = db.query(ContentModel).filter(
-            ContentModel.id == persisted_content_id,
-            ContentModel.user_id == current_user.id,
-        ).first()
-        if existing:
-            existing_metadata = dict(existing.generation_metadata or {})
-            existing_metadata.update(generation_metadata)
-            existing.generation_metadata = existing_metadata
-            db.commit()
-            db.refresh(existing)
+    metadata = dict(content.generation_metadata or {})
+    structured = dict(metadata.get("structured_output") or {})
     return {
-        **result,
-        "platform_fit_score": platform_review["platform_fit_score"],
-        "algorithm_suggestions": platform_review["algorithm_fit_suggestions"],
-        "terms_policy_warnings": platform_review["terms_policy_warnings"],
-        "customer_conversion_suggestions": platform_review["customer_conversion_suggestions"],
-        "follower_growth_suggestions": platform_review["follower_growth_suggestions"],
-        "provider_attempted": "genx" if genx_key else ("qwen" if qwen_key else ("huggingface" if hf_token else "template")),
-        "provider_actual": provider_actual,
-        "model_or_task": model_or_task,
-        "status": generation_status,
-        "warnings": platform_review["risks"],
-        "missing_capabilities": [],
-        "degraded": degraded,
-        "content_id": persisted_content_id,
+        **structured,
+        "content_id": content.id,
+        "platform": content.platform,
+        "format": metadata.get("format", payload.format),
+        "provider_attempted": metadata.get("provider_attempted"),
+        "provider_actual": metadata.get("provider_actual"),
+        "model_or_task": metadata.get("model_actual"),
+        "status": metadata.get("generated_media_status") or metadata.get("quality_gate") or "saved",
+        "warnings": metadata.get("quality_gate_issues") or [],
+        "degraded": bool(metadata.get("needs_review_duplicate")),
+        "media_state": metadata.get("media_state"),
+        "generated_media_readiness": metadata.get("generated_media_readiness"),
+        "media_job_ids": metadata.get("media_job_ids") or [],
+        "media_asset_ids": metadata.get("media_asset_ids") or [],
     }
 
 
@@ -1554,144 +1156,37 @@ async def generate_pack(
     db: Session = Depends(get_db),
     current_user: User = Depends(enforce_content_quota),
 ):
-    items = []
-    for platform in filter_launch_platforms(payload.platforms):
-        formats = payload.formats if not payload.auto_select_formats else []
-        if not formats:
-            from app.services.platform_format_strategy import select_formats
-            formats = select_formats(platform, auto_select=True)["formats"][:3]
-        for fmt in formats:
-            item = await generate_creative(
-                payload=GenerateCreativeRequest(
-                    webapp_id=payload.webapp_id,
-                    platform=platform,
-                    format=fmt,
-                    objective=payload.objective,
-                    tone=payload.tone,
-                    audience=payload.audience,
-                    offer=payload.offer,
-                    product_focus=payload.product_focus,
-                    auto_select_format=payload.auto_select_formats,
-                ),
-                db=db,
-                current_user=current_user,
-            )
-            items.append(item)
-    return {"count": len(items), "items": items}
+    from app.services.content_orchestrator import ContentOrchestrator, OrchestratorRequest
 
-
-@router.post("/{content_id}/approve", response_model=Content)
-async def approve_content(
-    content_id: str,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    content = db.query(ContentModel).filter(ContentModel.id == content_id, ContentModel.user_id == current_user.id).first()
-    if not content:
-        raise HTTPException(status_code=404, detail="Content not found")
-    content.status = ContentStatus.APPROVED
-    db.commit()
-    db.refresh(content)
-    return content
-
-
-@router.post("/{content_id}/reject", response_model=Content)
-async def reject_content(
-    content_id: str,
-    background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Reject content and immediately queue regeneration for the same webapp/platform."""
-    content = db.query(ContentModel).filter(
-        ContentModel.id == content_id, ContentModel.user_id == current_user.id
-    ).first()
-    if not content:
-        raise HTTPException(status_code=404, detail="Content not found")
-    content.status = ContentStatus.REJECTED
-    db.commit()
-    db.refresh(content)
-
-    # Immediately regenerate a replacement in the background
-    rejected_webapp_id = content.webapp_id
-    rejected_platform = content.platform
-    user_id = current_user.id
-
-    async def _regenerate_content_after_rejection():
-        import logging
-        logger = logging.getLogger(__name__)
-        from app.db.base import SessionLocal
-        from app.models.webapp import WebApp
-        from app.services.media_service import get_media_url, VIDEO_PLATFORMS
-        async_db = SessionLocal()
-        try:
-            user = async_db.query(User).filter(User.id == user_id).first()
-            if not user:
-                return
-            webapp = async_db.query(WebApp).filter(
-                WebApp.id == rejected_webapp_id, WebApp.user_id == user_id
-            ).first()
-            if not webapp:
-                return
-            hf_token = _get_hf_token(async_db, user)
-            qwen_key = _get_qwen_key(async_db, user)
-            openai_key = _get_openai_key(async_db, user)
-            genx_key = _get_genx_key(async_db, user)
-            webapp_data = {
-                "name": webapp.name,
-                "url": str(webapp.url),
-                "description": webapp.description,
-                "category": webapp.category,
-                "target_audience": getattr(webapp, "target_audience", ""),
-                "key_features": webapp.key_features or [],
+    orchestrator = ContentOrchestrator(db, current_user)
+    items = await orchestrator.generate_pack(
+        OrchestratorRequest(
+            action="generate_pack",
+            webapp_id=payload.webapp_id,
+            platform=(payload.platforms or ["instagram"])[0],
+            fmt=(payload.formats or ["text_post"])[0],
+            objective=payload.objective,
+            tone=payload.tone,
+            audience=payload.audience,
+            offer=payload.offer,
+            product_focus=payload.product_focus,
+        ),
+        platforms=payload.platforms,
+        formats=(payload.formats if not payload.auto_select_formats else ["text_post"]),
+    )
+    return {
+        "count": len(items),
+        "items": [
+            {
+                "id": item["content"].id,
+                "platform": item["content"].platform,
+                "title": item["content"].title,
+                "caption": item["content"].caption,
+                "generation_metadata": item["content"].generation_metadata,
             }
-            result = await _generate_text_content(
-                webapp_data, rejected_platform, hf_token, openai_key, qwen_key, genx_key
-            )
-            media_urls = await get_media_url(rejected_platform, webapp_data, qwen_key or hf_token)
-            content_type = "video" if rejected_platform in VIDEO_PLATFORMS else "image"
-            generator_name = "genx" if genx_key else ("qwen" if qwen_key else ("huggingface" if hf_token else "template"))
-            new_content = ContentModel(
-                id=str(uuid.uuid4()),
-                user_id=user_id,
-                webapp_id=rejected_webapp_id,
-                platform=rejected_platform,
-                type=content_type,
-                status=ContentStatus.PENDING,
-                title=result.get("title", "Generated Content"),
-                caption=result.get("caption", ""),
-                hashtags=result.get("hashtags", []),
-                media_urls=media_urls,
-                parent_content_id=content_id,
-                generation_metadata={
-                    **_generation_package(
-                        rejected_platform,
-                        result,
-                        generator_name,
-                        "configured" if genx_key else "not_configured",
-                        "Regenerated after rejection.",
-                        bool(genx_key),
-                    ),
-                    "source": "reject_regen",
-                    "replaced_content_id": content_id,
-                },
-            )
-            async_db.add(new_content)
-            async_db.commit()
-            logger.info(
-                "Replacement content %s generated for rejected content %s on %s",
-                new_content.id, content_id, rejected_platform,
-            )
-        except Exception as exc:
-            logger.error(
-                "Failed to regenerate content after rejection of %s: %s",
-                content_id, exc, exc_info=True,
-            )
-        finally:
-            async_db.close()
-
-    background_tasks.add_task(_regenerate_content_after_rejection)
-    return content
+            for item in items
+        ],
+    }
 
 
 @router.post("/approve-all")

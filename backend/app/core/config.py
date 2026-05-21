@@ -50,6 +50,7 @@ class Settings(BaseSettings):
     GENX_MODEL_IMAGE: str = ""
     GENX_MODEL_VIDEO: str = ""
     GENX_MODEL_AUDIO: str = ""
+    GENX_MODEL_AVATAR: str = ""
 
     # Primary LLM providers
     OPENAI_API_KEY: str = ""
@@ -203,6 +204,8 @@ class Settings(BaseSettings):
     ENABLE_AB_TESTING: bool = True
     ENABLE_VIRAL_PREDICTION: bool = True
     ENABLE_COST_TRACKING: bool = True
+    ENABLE_BILLING: bool = False
+    ENABLE_DEMO_MEDIA: bool = False
     
     # ==================== RATE LIMITS ====================
     MAX_CONTENT_PER_DAY: int = 10  # Per user
@@ -213,7 +216,7 @@ class Settings(BaseSettings):
     # Local filesystem directory for uploaded brand media assets.
     # In production this should be a persistent volume, e.g. /var/www/media.
     # Served by FastAPI StaticFiles at the /media path.
-    MEDIA_UPLOAD_DIR: str = "/tmp/amarktai_media"
+    MEDIA_UPLOAD_DIR: str = "./var/media"
 
     # ==================== BUSINESS LIMITS ====================
     MAX_BUSINESSES_PER_USER: int = 20  # Max web apps / businesses per account

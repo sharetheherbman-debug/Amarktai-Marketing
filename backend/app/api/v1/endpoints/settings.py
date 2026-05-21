@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from sqlalchemy import text as sql_text
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user
+from app.api.deps import admin_access_snapshot, effective_quota_limit, effective_plan_name, get_current_user
 from app.core.config import settings
 from app.db.session import get_db
 from app.models.user import User
@@ -209,6 +209,7 @@ def _genx_task_models() -> dict[str, str]:
         "image": getattr(settings, "GENX_MODEL_IMAGE", "") or "",
         "video": getattr(settings, "GENX_MODEL_VIDEO", "") or "",
         "audio": getattr(settings, "GENX_MODEL_AUDIO", "") or "",
+        "avatar": getattr(settings, "GENX_MODEL_AVATAR", "") or "",
     }
 
 
@@ -287,7 +288,7 @@ def _genx_capabilities_from_config() -> dict[str, Any]:
         "image": {"model": task_models.get("image"), "configured": bool(task_models.get("image"))},
         "video": {"model": task_models.get("video"), "configured": bool(task_models.get("video"))},
         "voice": {"model": task_models.get("audio"), "configured": bool(task_models.get("audio"))},
-        "avatar": {"model": task_models.get("audio"), "configured": bool(task_models.get("audio"))},
+        "avatar": {"model": task_models.get("avatar"), "configured": bool(task_models.get("avatar"))},
         "kling_video": {"model": task_models.get("video"), "configured": bool(task_models.get("video"))},
     }
 
@@ -597,15 +598,22 @@ async def test_api_key(
 async def get_billing(
     current_user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
-    plan = getattr(current_user, "plan", "free") or "free"
-    quota_map = {"free": 50, "pro": 500, "business": 2000, "enterprise": 99999}
+    access = admin_access_snapshot(current_user)
+    plan = effective_plan_name(current_user)
     used = getattr(current_user, "monthly_content_used", 0) or 0
-    limit = quota_map.get(str(plan), 50)
+    limit = effective_quota_limit(current_user)
     return {
         "plan_tier": str(plan),
+        "effective_plan": str(plan),
         "quota_used": used,
         "quota_limit": limit,
         "quota_remaining": max(0, limit - used),
+        "is_admin": access["is_admin"],
+        "billing_enabled": access["billing_enabled"],
+        "show_billing_prompts": access["show_billing_prompts"],
+        "unlimited_content_quota": access["unlimited_content_quota"],
+        "unlimited_business_count": access["unlimited_business_count"],
+        "unrestricted_provider_access": access["unrestricted_provider_access"],
     }
 
 
@@ -938,6 +946,11 @@ async def get_readiness(
         "pixabay": provider_details["pixabay"]["status"],
         "fallback": "configured" if bool(qwen_key or hf_token) else "missing",
         "can_generate_beta": True,
+        "generated_media": (
+            "GenX ready"
+            if provider_details["genx"]["status"] == "test_passed" and _genx_capabilities_from_config()["video"]["configured"]
+            else ("mapping required" if not any(v["configured"] for v in _genx_capabilities_from_config().values()) else "script-only")
+        ),
     }
     scraping_readiness = {
         "firecrawl": provider_details["firecrawl"]["status"],
@@ -972,6 +985,7 @@ async def get_readiness(
             "configured": genx_configured,
             "health_ok": bool(genx_health.get("ok")),
             "model": genx_models["effective_default_model"],
+            "model_mappings": _genx_capabilities_from_config(),
             "models_tested": bool(_GENX_LAST_TEST_STATE.get(current_user.id, {}).get("models_tested", False)),
             "required_models_ok": bool(_GENX_LAST_TEST_STATE.get(current_user.id, {}).get("required_models_ok", genx_health.get("ok"))),
             "failed_models": _GENX_LAST_TEST_STATE.get(current_user.id, {}).get("failed_models", []),

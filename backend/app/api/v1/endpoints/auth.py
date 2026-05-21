@@ -71,6 +71,11 @@ class TokenResponse(BaseModel):
     name: str | None
     is_admin: bool = False
     email_verified: bool = False
+    effective_plan: str = "free"
+    unlimited_content_quota: bool = False
+    unlimited_business_count: bool = False
+    unrestricted_provider_access: bool = False
+    billing_enabled: bool = False
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -99,15 +104,21 @@ def _send_email(to: str, subject: str, html: str) -> None:
 
 def _build_token_response(user: UserModel) -> TokenResponse:
     """Build a consistent token response including admin + verification status."""
-    from app.api.deps import is_admin_user
+    from app.api.deps import admin_access_snapshot
     token = create_access_token(user.id)
+    access = admin_access_snapshot(user)
     return TokenResponse(
         access_token=token,
         user_id=user.id,
         email=user.email,
         name=user.name,
-        is_admin=is_admin_user(user),
+        is_admin=bool(access["is_admin"]),
         email_verified=getattr(user, "email_verified", False) or False,
+        effective_plan=str(access["effective_plan"]),
+        unlimited_content_quota=bool(access["unlimited_content_quota"]),
+        unlimited_business_count=bool(access["unlimited_business_count"]),
+        unrestricted_provider_access=bool(access["unrestricted_provider_access"]),
+        billing_enabled=bool(access["billing_enabled"]),
     )
 
 

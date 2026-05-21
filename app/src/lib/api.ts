@@ -634,6 +634,14 @@ export const contentApi = {
       }),
     });
   },
+
+  savePreview: async (previewId: string): Promise<ContentLibraryItem> => {
+    const data = await apiFetch<Record<string, unknown>>('/content/preview/save', {
+      method: 'POST',
+      body: JSON.stringify({ preview_id: previewId }),
+    });
+    return mapContentItem(data);
+  },
 };
 
 export const settingsApi = {

@@ -6,9 +6,12 @@ import { getStoredToken } from '@/lib/auth';
 
 interface BillingInfo {
   plan_tier: string;
+  effective_plan?: string;
   quota_used: number;
   quota_limit: number;
   quota_remaining: number;
+  is_admin?: boolean;
+  billing_enabled?: boolean;
 }
 
 const fadeUp = {
@@ -33,6 +36,7 @@ export default function UsageWidget() {
           quota_used: 0,
           quota_limit: 50,
           quota_remaining: 50,
+          billing_enabled: false,
         });
       })
       .finally(() => setLoading(false));
@@ -43,7 +47,8 @@ export default function UsageWidget() {
       ? Math.min(Math.round((billing.quota_used / billing.quota_limit) * 100), 100)
       : 0;
 
-  const isFree = billing?.plan_tier?.toLowerCase() === 'free';
+  const isFree = (billing?.effective_plan ?? billing?.plan_tier ?? 'free').toLowerCase() === 'free';
+  const showUpgrade = isFree && billing?.billing_enabled && !billing?.is_admin;
 
   return (
     <motion.div
@@ -98,7 +103,7 @@ export default function UsageWidget() {
             {billing?.quota_remaining ?? 0} posts remaining
           </p>
 
-          {isFree && (
+          {showUpgrade && (
             <Link
               to="/pricing"
               className="mt-3 inline-flex items-center gap-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold px-4 py-2 rounded-lg transition-colors"

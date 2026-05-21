@@ -1,17 +1,7 @@
-"""
-Media Service — central router for image and video generation.
-
-HuggingFace is the primary provider for ALL media generation ($9/month Pro):
-  - Images: FLUX.1-schnell (fast, high quality) or SDXL as fallback
-  - Videos: damo-vilab/text-to-video-ms-1.7b for short video clips
-  - Fallback: picsum.photos (images) and free stock videos (video)
-
-Designed and created by AmarktAI Marketing
-"""
+"""Truthful media helpers for live and demo media generation."""
 
 from __future__ import annotations
 
-import hashlib
 import base64
 from typing import Any
 
@@ -22,15 +12,6 @@ _HF_FLUX_MODEL = "black-forest-labs/FLUX.1-schnell"
 _HF_SDXL_MODEL = "stabilityai/stable-diffusion-xl-base-1.0"
 _HF_VIDEO_MODEL = "damo-vilab/text-to-video-ms-1.7b"
 _HF_INFERENCE_URL = "https://api-inference.huggingface.co/models/{model}"
-
-# Free placeholder sources
-_PLACEHOLDER_VIDEO_URLS = [
-    "https://assets.mixkit.co/videos/preview/mixkit-typing-on-a-laptop-in-a-coffee-shop-484-large.mp4",
-    "https://assets.mixkit.co/videos/preview/mixkit-man-working-on-laptop-top-view-4848-large.mp4",
-    "https://assets.mixkit.co/videos/preview/mixkit-woman-working-on-her-laptop-5385-large.mp4",
-    "https://assets.mixkit.co/videos/preview/mixkit-digital-marketing-campaign-5374-large.mp4",
-    "https://assets.mixkit.co/videos/preview/mixkit-hands-typing-on-a-laptop-keyboard-1860-large.mp4",
-]
 
 _PLATFORM_DIMENSIONS: dict[str, tuple[int, int]] = {
     "instagram": (1080, 1080),
@@ -62,26 +43,21 @@ async def get_media_url(
     hf_token: str | None = None,
     image_prompt: str | None = None,
 ) -> list[str]:
-    """
-    Return list of media URLs for a content item.
-    - Video platforms: HF text-to-video or stock placeholder
-    - Image platforms: HF FLUX/SDXL or picsum placeholder
-    """
+    """Return real generated media only; demo placeholders stay opt-in."""
     if platform in VIDEO_PLATFORMS:
         if hf_token:
             url = await _generate_hf_video(hf_token, webapp_data, platform)
             if url:
                 return [url]
-        return [_get_stock_video(webapp_data)]
+        return [_get_demo_video()] if settings.ENABLE_DEMO_MEDIA else []
 
-    # Image platform
     if hf_token:
         prompt = image_prompt or _build_image_prompt(webapp_data, platform)
         url = await _generate_hf_image(hf_token, prompt, platform)
         if url:
             return [url]
 
-    return [_get_placeholder_image(webapp_data, platform)]
+    return [_get_demo_image(platform)] if settings.ENABLE_DEMO_MEDIA else []
 
 
 async def _generate_hf_image(hf_token: str, prompt: str, platform: str) -> str | None:
@@ -111,7 +87,6 @@ async def _generate_hf_image(hf_token: str, prompt: str, platform: str) -> str |
 async def _generate_hf_video(hf_token: str, webapp_data: dict[str, Any], platform: str) -> str | None:
     """
     Generate a short video clip via HuggingFace text-to-video.
-    Returns None on failure (caller uses stock placeholder).
     """
     name = webapp_data.get("name", "product")
     description = webapp_data.get("description", "")[:100]
@@ -132,28 +107,24 @@ async def _generate_hf_video(hf_token: str, webapp_data: dict[str, Any], platfor
         pass
     return None
 
-
-def _get_placeholder_image(webapp_data: dict[str, Any], platform: str) -> str:
-    seed_str = f"{webapp_data.get('name', 'app')}-{platform}"
-    seed = hashlib.md5(seed_str.encode()).hexdigest()[:8]
+def _get_demo_image(platform: str) -> str:
     w, h = _PLATFORM_DIMENSIONS.get(platform, (1080, 1080))
-    return f"https://picsum.photos/seed/{seed}/{w}/{h}"
+    return f"https://picsum.photos/seed/demo/{w}/{h}"
 
 
-def _get_stock_video(webapp_data: dict[str, Any]) -> str:
-    idx = abs(hash(webapp_data.get("name", "app"))) % len(_PLACEHOLDER_VIDEO_URLS)
-    return _PLACEHOLDER_VIDEO_URLS[idx]
+def _get_demo_video() -> str:
+    return "https://assets.mixkit.co/videos/preview/mixkit-typing-on-a-laptop-in-a-coffee-shop-484-large.mp4"
 
 
 # Public aliases — use these outside this module instead of the private variants
 def placeholder_image(webapp_data: dict[str, Any], platform: str) -> str:
-    """Public wrapper around _get_placeholder_image for use in other modules."""
-    return _get_placeholder_image(webapp_data, platform)
+    """Demo-only placeholder image."""
+    return _get_demo_image(platform)
 
 
 def placeholder_video(webapp_data: dict[str, Any]) -> str:
-    """Public wrapper around _get_stock_video for use in other modules."""
-    return _get_stock_video(webapp_data)
+    """Demo-only placeholder video."""
+    return _get_demo_video()
 
 
 def _build_image_prompt(webapp_data: dict[str, Any], platform: str) -> str:

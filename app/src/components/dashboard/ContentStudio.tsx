@@ -299,6 +299,7 @@ export function ContentStudio({
   const [busyAction, setBusyAction] = useState<'single' | 'all' | 'pack' | null>(null);
   const [apiError, setApiError] = useState<string>('');
   const [items, setItems] = useState<ContentLibraryItem[]>([]);
+  const [previewResult, setPreviewResult] = useState<Record<string, unknown> | null>(null);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [filterStatus, setFilterStatus] = useState<string>('active');
   const [rejectTarget, setRejectTarget] = useState<string | null>(null);
@@ -365,15 +366,7 @@ export function ContentStudio({
     setApiError('');
     try {
       if (format === 'text_post') {
-        const item = await contentApi.generate(businessId, platform, {
-          offer: offer.trim() || undefined,
-          objective: objective.trim() || undefined,
-          tone: tone.trim() || undefined,
-          audience: audience.trim() || undefined,
-        });
-        onGenerated?.([item]);
-      } else {
-        await contentApi.generateCreative({
+        const preview = await contentApi.preview({
           webappId: businessId,
           platform,
           format,
@@ -381,11 +374,23 @@ export function ContentStudio({
           objective: objective.trim() || undefined,
           tone: tone.trim() || undefined,
           audience: audience.trim() || undefined,
-          autoSelectFormat: false,
+          productFocus: offer.trim() || undefined,
         });
+        setPreviewResult(preview as Record<string, unknown>);
+      } else {
+        const preview = await contentApi.preview({
+          webappId: businessId,
+          platform,
+          format,
+          offer: offer.trim() || undefined,
+          objective: objective.trim() || undefined,
+          tone: tone.trim() || undefined,
+          audience: audience.trim() || undefined,
+          productFocus: offer.trim() || undefined,
+        });
+        setPreviewResult(preview as Record<string, unknown>);
       }
-      await refreshItems();
-      toast.success(`${platformLabel(platform)} ${format.replaceAll('_', ' ')} created.`);
+      toast.success(`${platformLabel(platform)} ${format.replaceAll('_', ' ')} preview ready.`);
       setStep(5);
     } catch (err) {
       setApiError(err instanceof Error ? err.message : 'Generation failed.');
@@ -722,6 +727,36 @@ export function ContentStudio({
                 <option value="rejected">Rejected</option>
               </select>
             </div>
+            {previewResult ? (
+              <div className="rounded-2xl border border-blue-500/30 bg-blue-500/10 p-4 space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs uppercase tracking-wide text-blue-300">Ephemeral preview</p>
+                    <p className="text-sm text-slate-200">
+                      {String((previewResult.preview as Record<string, unknown> | undefined)?.title ?? (previewResult.preview as Record<string, unknown> | undefined)?.preview_title ?? 'Preview ready')}
+                    </p>
+                  </div>
+                  <Button
+                    onClick={async () => {
+                      try {
+                        const saved = await contentApi.savePreview(String(previewResult.preview_id ?? ''));
+                        setPreviewResult(null);
+                        await refreshItems();
+                        toast.success('Preview saved as a draft.');
+                      } catch {
+                        toast.error('Saving the preview failed.');
+                      }
+                    }}
+                    className="bg-blue-600 hover:bg-blue-500"
+                  >
+                    Save draft
+                  </Button>
+                </div>
+                <pre className="overflow-x-auto whitespace-pre-wrap rounded-xl border border-[#252A3A] bg-[#0D0F14] p-3 text-xs text-slate-300">
+                  {JSON.stringify(previewResult.preview, null, 2)}
+                </pre>
+              </div>
+            ) : null}
             {filteredItems.length === 0 ? (
               <div className="rounded-xl border border-dashed border-[#252A3A] bg-[#141720] p-6 text-sm text-slate-400">
                 No content yet. Go back to Step 4 and generate your campaign.
@@ -808,4 +843,3 @@ export function ContentStudio({
     </div>
   );
 }
-

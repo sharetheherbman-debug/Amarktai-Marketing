@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user
+from app.api.deps import admin_access_snapshot, effective_quota_limit, effective_plan_name, get_current_user
 from app.core.config import settings
 from app.db.session import get_db
 from app.models.user import PlanType, User
@@ -76,7 +76,7 @@ PLAN_QUOTAS: dict[PlanType, int] = {p: int(d["quota"]) for p, d in PLAN_DEFS.ite
 
 
 def _stripe_configured() -> bool:
-    return bool(settings.STRIPE_SECRET_KEY)
+    return bool(settings.ENABLE_BILLING and settings.STRIPE_SECRET_KEY)
 
 
 def _normalize_plan(raw: str | None) -> PlanType:
@@ -91,6 +91,11 @@ def _normalize_plan(raw: str | None) -> PlanType:
 
 
 def _get_stripe():
+    if not settings.ENABLE_BILLING:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Billing is disabled for this deployment.",
+        )
     if not _stripe_configured():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -121,7 +126,7 @@ def _price_to_plan() -> dict[str, PlanType]:
 @router.get("/plans")
 async def list_plans() -> dict[str, Any]:
     plans = [cfg for _, cfg in PLAN_DEFS.items()]
-    return {"plans": plans, "stripe_configured": _stripe_configured()}
+    return {"plans": plans, "stripe_configured": _stripe_configured(), "billing_enabled": bool(settings.ENABLE_BILLING)}
 
 
 @router.post("/checkout-session", response_model=CheckoutResponse)
@@ -130,6 +135,8 @@ async def create_checkout_session(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> CheckoutResponse:
+    if admin_access_snapshot(current_user)["is_admin"]:
+        return CheckoutResponse(url=f"{settings.FRONTEND_URL}/dashboard/settings?billing=owner-bypass")
     stripe = _get_stripe()
     plan = _normalize_plan(body.plan)
     if plan == PlanType.FREE:
@@ -178,6 +185,8 @@ async def create_checkout_session_alias(
 async def create_portal_session(
     current_user: User = Depends(get_current_user),
 ) -> PortalResponse:
+    if admin_access_snapshot(current_user)["is_admin"]:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Owner accounts do not use billing.")
     stripe = _get_stripe()
     customer_id = getattr(current_user, "stripe_customer_id", None)
     if not customer_id:
@@ -318,20 +327,19 @@ def _handle_subscription_deleted(data: dict[str, Any], db: Session) -> None:
 async def billing_status(
     current_user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
-    raw_plan = getattr(current_user, "plan", PlanType.FREE)
-    if isinstance(raw_plan, PlanType):
-        plan = raw_plan
-    else:
-        try:
-            plan = _normalize_plan(str(raw_plan))
-        except HTTPException:
-            plan = PlanType.FREE
+    access = admin_access_snapshot(current_user)
+    plan_value = effective_plan_name(current_user)
+    try:
+        plan = PlanType(plan_value)
+    except Exception:
+        plan = PlanType.FREE
     quota_used = int(getattr(current_user, "monthly_content_used", 0) or 0)
     cfg = PLAN_DEFS.get(plan, PLAN_DEFS[PlanType.FREE])
-    limit = int(cfg["quota"])
+    limit = effective_quota_limit(current_user)
 
     return {
-        "plan_tier": plan.value,
+        "plan_tier": plan_value,
+        "effective_plan": plan_value,
         "plan_name": cfg["name"],
         "price": cfg["price"],
         "quota_used": quota_used,
@@ -340,4 +348,6 @@ async def billing_status(
         "features": cfg["features"],
         "stripe_configured": _stripe_configured(),
         "has_billing_account": bool(getattr(current_user, "stripe_customer_id", None)),
+        "billing_enabled": access["billing_enabled"],
+        "is_admin": access["is_admin"],
     }

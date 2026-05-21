@@ -5,34 +5,28 @@ from typing import Any
 from app.services.platform_catalog import normalize_platform
 from app.services.qwen_router import route_qwen_model
 
-_COST_HINTS: dict[str, dict[str, str]] = {
-    "budget": {"image": "$0.001–0.005/img", "video": "$0.01–0.05/clip", "text": "$0.0001–0.001/1k tokens", "voice": "$0.001–0.005/min"},
-    "balanced": {"image": "$0.005–0.02/img", "video": "$0.05–0.2/clip", "text": "$0.001–0.005/1k tokens", "voice": "$0.005–0.02/min"},
-    "premium": {"image": "$0.02–0.10/img", "video": "$0.2–1.0/clip", "text": "$0.005–0.02/1k tokens", "voice": "$0.02–0.10/min"},
-}
-
-_MULTIMODAL_CAPABILITIES = {
-    "image_generation", "video_generation", "talking_avatar_video",
-    "text_to_speech", "voice_cloning", "image_editing", "video_editing",
-}
+_MEDIA_CAPABILITIES = {"image", "video", "voice", "avatar", "premium_creative"}
 
 
-def _output_type(capability: str, fmt: str) -> str:
-    if "image" in capability or "image" in fmt:
+def _normalize_capability(capability: str, fmt: str, intent: str) -> str:
+    lowered = (capability or "").lower()
+    if lowered in {"image_generation", "image_editing", "image"} or "image" in fmt:
         return "image"
-    if "video" in capability or "video" in fmt or "avatar" in capability:
+    if lowered in {"video_generation", "video", "talking_avatar_video"} or "video" in fmt or intent == "short_video":
         return "video"
-    if "speech" in capability or "voice" in capability or "tts" in capability:
-        return "audio"
+    if lowered in {"text_to_speech", "voice", "audio", "text_to_audio"} or "voice" in fmt or "audio" in fmt:
+        return "voice"
+    if lowered in {"avatar", "talking_avatar", "avatar_video"} or "avatar" in fmt or intent == "talking_avatar":
+        return "avatar"
+    if intent in {"ad_campaign", "youtube_kit", "platform_pack"}:
+        return "premium_creative"
     return "text"
 
 
-def _budget_tier(budget_mode: str, is_multimodal: bool) -> str:
-    if budget_mode == "premium":
-        return "premium"
-    if budget_mode == "budget" and not is_multimodal:
-        return "budget"
-    return "balanced"
+def _mapping_for(capability: str, model_mappings: dict[str, str] | None) -> str:
+    if not model_mappings:
+        return ""
+    return str(model_mappings.get(capability) or "").strip()
 
 
 def decide_provider(
@@ -48,98 +42,165 @@ def decide_provider(
     hf_tasks: dict[str, Any] | None = None,
     platform_intelligence: dict[str, Any] | None = None,
     learning_insights: dict[str, Any] | None = None,
+    intent: str | None = None,
+    provider_mode: str = "auto",
+    model_mappings: dict[str, str] | None = None,
+    capability_availability: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    intent = intent or fmt or "quick_post"
     platform = normalize_platform(platform)
-    fallback_chain: list[str] = []
-    out_type = _output_type(capability, fmt)
-    is_multimodal = capability in _MULTIMODAL_CAPABILITIES or fmt in {"generated_image", "talking_avatar_video", "video_clip", "audio_clip"}
-    budget_tier = _budget_tier(budget_mode, is_multimodal)
-    can_generate_asset = is_multimodal
-    risk_notes: list[str] = []
+    resolved_capability = _normalize_capability(capability, fmt, intent)
+    allow_fallback = provider_mode in {"auto", "fallback", "balanced"}
+    genx_mapping = _mapping_for(resolved_capability, model_mappings)
+    genx_available = bool(provider_keys.get("genx"))
+    qwen_available = bool(provider_keys.get("qwen"))
+    hf_available = bool(provider_keys.get("huggingface"))
+    pixabay_available = bool(provider_keys.get("pixabay"))
+    provider_attempt_order: list[str] = []
 
-    if budget_mode not in {"auto", "budget", "balanced", "premium", "manual"}:
-        risk_notes.append(f"Unknown budget_mode '{budget_mode}' — defaulting to auto.")
-        budget_mode = "auto"
-
-    # GenX preferred for premium/multimodal
-    if is_multimodal and provider_keys.get("genx"):
-        fallback_chain = ["genx", "qwen", "huggingface", "template"]
-        preferred_model = (genx_catalog or {}).get("preferred_model") or "catalog_discovery_required"
-        cost_hint = _COST_HINTS.get(budget_tier, {}).get(out_type, "unknown")
+    def pack(
+        *,
+        selected_provider: str,
+        selected_model_or_task: str,
+        fallback_chain: list[str],
+        media_state: str,
+        can_generate_asset: bool,
+        reason: str,
+        user_message: str,
+        status: str = "configured",
+    ) -> dict[str, Any]:
         return {
-            "provider": "genx",
-            "model": preferred_model,
-            "selected_provider": "genx",
-            "selected_model_or_task": preferred_model,
+            "provider": selected_provider,
+            "model": selected_model_or_task,
+            "selected_provider": selected_provider,
+            "selected_model_or_task": selected_model_or_task,
+            "capability": resolved_capability,
             "fallback_chain": fallback_chain,
-            "reason": "Premium or multimodal task routed to GenX.",
-            "budget_tier": budget_tier,
-            "expected_output_type": out_type,
+            "media_state": media_state,
             "can_generate_asset": can_generate_asset,
-            "estimated_cost_hint": cost_hint,
-            "risk_notes": risk_notes,
-        }
-
-    # Qwen for text/budget/translation/learning
-    if provider_keys.get("qwen"):
-        qwen_cap = "image" if "image" in capability or "image" in fmt else (
-            "video" if "video" in capability or "video" in fmt else (
-                "voice" if "tts" in capability or "voice" in capability or "speech" in capability else "text"
-            )
-        )
-        route = route_qwen_model(qwen_cap, budget_mode)
-        fallback_chain = ["qwen", "huggingface", "template"]
-        cost_hint = _COST_HINTS.get(budget_tier, {}).get(out_type, "unknown")
-        reason = (
-            "Budget-friendly translation/learning task routed to Qwen."
-            if capability in {"translation", "learning", "hashtag"}
-            else "Budget-friendly task routed to Qwen."
-        )
-        return {
-            "provider": "qwen",
-            "model": route.get("model"),
-            "selected_provider": "qwen",
-            "selected_model_or_task": route.get("model"),
-            "fallback_chain": fallback_chain,
             "reason": reason,
-            "budget_tier": budget_tier,
-            "expected_output_type": out_type,
-            "can_generate_asset": can_generate_asset,
-            "estimated_cost_hint": cost_hint,
-            "risk_notes": risk_notes,
+            "user_message": user_message,
+            "status": status,
+            "provider_attempt_order": provider_attempt_order or [selected_provider],
         }
 
-    # Hugging Face as fallback
-    if provider_keys.get("huggingface"):
-        fallback_chain = ["huggingface", "template"]
-        hf_model = (hf_tasks or {}).get("preferred_model") or capability
-        risk_notes.append("HuggingFace free tier may have rate limits or model unavailability.")
-        return {
-            "provider": "huggingface",
-            "model": hf_model,
-            "selected_provider": "huggingface",
-            "selected_model_or_task": hf_model,
-            "fallback_chain": fallback_chain,
-            "reason": "Task fallback routed to Hugging Face.",
-            "budget_tier": "budget",
-            "expected_output_type": out_type,
-            "can_generate_asset": False,
-            "estimated_cost_hint": "Free (with token) or low cost",
-            "risk_notes": risk_notes,
-        }
+    if resolved_capability in _MEDIA_CAPABILITIES:
+        provider_attempt_order.extend(["genx", "qwen", "huggingface", "pixabay", "script_only"])
+        if genx_available:
+            capability_flag = bool((capability_availability or {}).get("genx", {}).get(resolved_capability, True))
+            if not genx_mapping:
+                return pack(
+                    selected_provider="genx",
+                    selected_model_or_task="",
+                    fallback_chain=["qwen", "huggingface", "pixabay", "script_only"] if allow_fallback else ["script_only"],
+                    media_state="not_rendered",
+                    can_generate_asset=False,
+                    reason="GenX is configured but the required model mapping is missing.",
+                    user_message="GenX model mapping is required before premium media can render.",
+                    status="model_mapping_required",
+                )
+            if not capability_flag:
+                return pack(
+                    selected_provider="genx",
+                    selected_model_or_task=genx_mapping,
+                    fallback_chain=["qwen", "huggingface", "pixabay", "script_only"] if allow_fallback else ["script_only"],
+                    media_state="unavailable",
+                    can_generate_asset=False,
+                    reason="GenX key is present but the requested capability is unavailable.",
+                    user_message="GenX is connected, but this media capability is unavailable for the mapped model.",
+                    status="capability_unavailable",
+                )
+            return pack(
+                selected_provider="genx",
+                selected_model_or_task=genx_mapping,
+                fallback_chain=["qwen", "huggingface", "pixabay", "script_only"],
+                media_state="not_rendered",
+                can_generate_asset=True,
+                reason="GenX is the premium multimodal provider for this task.",
+                user_message="GenX will be used as the premium multimodal engine.",
+            )
+        if resolved_capability in {"image", "video"} and pixabay_available:
+            return pack(
+                selected_provider="pixabay",
+                selected_model_or_task="asset_search",
+                fallback_chain=["script_only"],
+                media_state="asset_search_result",
+                can_generate_asset=False,
+                reason="Using a real stock asset search provider instead of fake generated media.",
+                user_message="Real stock assets will be suggested with source metadata.",
+            )
+        if resolved_capability in {"voice", "avatar", "video"}:
+            script_message = "A truthful script-only result will be returned until premium media is configured."
+            if qwen_available and allow_fallback:
+                route = route_qwen_model("text", budget_mode)
+                return pack(
+                    selected_provider="qwen",
+                    selected_model_or_task=str(route.get("model") or "qwen"),
+                    fallback_chain=["huggingface", "script_only"],
+                    media_state="script_only",
+                    can_generate_asset=False,
+                    reason="Falling back to Qwen for script generation while premium media stays unrendered.",
+                    user_message=script_message,
+                )
+            if hf_available and allow_fallback:
+                return pack(
+                    selected_provider="huggingface",
+                    selected_model_or_task=str((hf_tasks or {}).get("preferred_model") or resolved_capability),
+                    fallback_chain=["script_only"],
+                    media_state="script_only",
+                    can_generate_asset=False,
+                    reason="Hugging Face is being used only as a task fallback.",
+                    user_message=script_message,
+                )
+            return pack(
+                selected_provider="script_only",
+                selected_model_or_task="script_only",
+                fallback_chain=["script_only"],
+                media_state="script_only",
+                can_generate_asset=False,
+                reason="No premium media provider is configured.",
+                user_message=script_message,
+            )
 
-    # Template fallback
-    risk_notes.append("No external provider keys configured — using template fallback. Add GENX_API_KEY or QWEN_API_KEY for real AI generation.")
-    return {
-        "provider": "template",
-        "model": "template_fallback",
-        "selected_provider": "template",
-        "selected_model_or_task": "template_fallback",
-        "fallback_chain": ["template"],
-        "reason": "No external provider keys configured.",
-        "budget_tier": "budget",
-        "expected_output_type": out_type,
-        "can_generate_asset": False,
-        "estimated_cost_hint": "Free (template only)",
-        "risk_notes": risk_notes,
-    }
+    provider_attempt_order.extend(["genx", "qwen", "huggingface", "script_only"])
+    if genx_available and _mapping_for("text", model_mappings):
+        return pack(
+            selected_provider="genx",
+            selected_model_or_task=_mapping_for("text", model_mappings),
+            fallback_chain=["qwen", "huggingface", "script_only"],
+            media_state="not_rendered",
+            can_generate_asset=False,
+            reason="GenX is used for premium text and creative generation.",
+            user_message="GenX will be used for premium creative output.",
+        )
+    if qwen_available:
+        route = route_qwen_model("text", budget_mode)
+        return pack(
+            selected_provider="qwen",
+            selected_model_or_task=str(route.get("model") or "qwen"),
+            fallback_chain=["huggingface", "script_only"],
+            media_state="not_rendered",
+            can_generate_asset=False,
+            reason="Qwen is the budget and high-volume text router.",
+            user_message="Qwen will generate the creative text for this request.",
+        )
+    if hf_available and allow_fallback:
+        return pack(
+            selected_provider="huggingface",
+            selected_model_or_task=str((hf_tasks or {}).get("preferred_model") or resolved_capability),
+            fallback_chain=["script_only"],
+            media_state="not_rendered",
+            can_generate_asset=False,
+            reason="Hugging Face is only being used as a task fallback.",
+            user_message="Hugging Face fallback is active for this task.",
+        )
+    return pack(
+        selected_provider="script_only",
+        selected_model_or_task="script_only",
+        fallback_chain=["script_only"],
+        media_state="unavailable",
+        can_generate_asset=False,
+        reason="No configured provider is available for this request.",
+        user_message="No live provider is configured yet, so only a truthful script-only result is available.",
+        status="not_configured",
+    )

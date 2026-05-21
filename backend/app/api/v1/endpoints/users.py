@@ -83,17 +83,23 @@ async def get_me(
     current_user: UserModel = Depends(get_current_user),
 ):
     """Get current user with admin status."""
-    from app.api.deps import is_admin_user
+    from app.api.deps import admin_access_snapshot
+    access = admin_access_snapshot(current_user)
     return {
         "id": current_user.id,
         "email": current_user.email,
         "name": current_user.name,
         "avatar": current_user.avatar,
-        "plan": current_user.plan,
+        "plan": access["effective_plan"],
+        "effective_plan": access["effective_plan"],
         "created_at": current_user.created_at,
         "updated_at": current_user.updated_at,
-        "is_admin": is_admin_user(current_user),
+        "is_admin": access["is_admin"],
         "email_verified": getattr(current_user, "email_verified", False) or False,
+        "unlimited_content_quota": access["unlimited_content_quota"],
+        "unlimited_business_count": access["unlimited_business_count"],
+        "unrestricted_provider_access": access["unrestricted_provider_access"],
+        "billing_enabled": access["billing_enabled"],
     }
 
 @router.put("/me", response_model=User)

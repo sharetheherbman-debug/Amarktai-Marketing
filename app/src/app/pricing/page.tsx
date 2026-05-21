@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Link } from 'react-router-dom';
 import { Check, ArrowRight, Zap } from 'lucide-react';
@@ -97,6 +97,14 @@ const FAQ = [
 
 export default function PricingPage() {
   const [annual, setAnnual] = useState(false);
+  const [billingEnabled, setBillingEnabled] = useState(false);
+
+  useEffect(() => {
+    fetch('/api/v1/billing/plans')
+      .then(async (res) => (res.ok ? res.json() : { billing_enabled: false }))
+      .then((data: { billing_enabled?: boolean }) => setBillingEnabled(Boolean(data.billing_enabled)))
+      .catch(() => setBillingEnabled(false));
+  }, []);
 
   return (
     <div className="min-h-screen bg-[#06070A] text-[#F0F2F8] relative overflow-hidden">
@@ -188,34 +196,40 @@ export default function PricingPage() {
                   ))}
                 </ul>
 
-                <button
-                  onClick={async () => {
-                    const token = getStoredToken();
-                    if (!token || plan.planId === 'free') {
-                      window.location.href = '/register';
-                      return;
-                    }
-                    try {
-                      const res = await fetch('/api/v1/billing/checkout-session', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-                        body: JSON.stringify({ plan: plan.planId }),
-                      });
-                      const data = await res.json();
-                      if (data.url) window.location.href = data.url;
-                    } catch {
-                      window.location.href = '/register';
-                    }
-                  }}
-                  className={`w-full py-3 rounded-xl font-semibold text-center text-sm transition-all flex items-center justify-center gap-2 ${
-                    plan.highlighted
-                      ? 'bg-blue-600 hover:bg-blue-500 text-white'
-                      : 'bg-[#141720] hover:bg-[#1E2130] text-white border border-[#252A3A]'
-                  }`}
-                >
-                  {plan.cta}
-                  <ArrowRight className="w-4 h-4" />
-                </button>
+                {billingEnabled ? (
+                  <button
+                    onClick={async () => {
+                      const token = getStoredToken();
+                      if (!token || plan.planId === 'free') {
+                        window.location.href = '/register';
+                        return;
+                      }
+                      try {
+                        const res = await fetch('/api/v1/billing/checkout-session', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                          body: JSON.stringify({ plan: plan.planId }),
+                        });
+                        const data = await res.json();
+                        if (data.url) window.location.href = data.url;
+                      } catch {
+                        window.location.href = '/register';
+                      }
+                    }}
+                    className={`w-full py-3 rounded-xl font-semibold text-center text-sm transition-all flex items-center justify-center gap-2 ${
+                      plan.highlighted
+                        ? 'bg-blue-600 hover:bg-blue-500 text-white'
+                        : 'bg-[#141720] hover:bg-[#1E2130] text-white border border-[#252A3A]'
+                    }`}
+                  >
+                    {plan.cta}
+                    <ArrowRight className="w-4 h-4" />
+                  </button>
+                ) : (
+                  <div className="w-full rounded-xl border border-[#252A3A] bg-[#141720] px-4 py-3 text-center text-sm text-[#9AA3B8]">
+                    Billing is deferred for this launch.
+                  </div>
+                )}
               </motion.div>
             ))}
           </motion.div>

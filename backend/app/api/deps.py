@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from app.core.security import decode_access_token
 from app.core.config import settings
 from app.db.base import get_db
-from app.models.user import User
+from app.models.user import PlanType, User
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -35,6 +35,32 @@ def is_admin_user(user: User) -> bool:
     admin_ids_raw = os.getenv("ADMIN_USER_IDS", "")
     admin_ids = {uid.strip() for uid in admin_ids_raw.split(",") if uid.strip()}
     return user.id in admin_ids
+
+
+def effective_plan_name(user: User) -> str:
+    if is_admin_user(user):
+        return PlanType.ENTERPRISE.value
+    plan = getattr(user, "plan", PlanType.FREE)
+    return plan.value if hasattr(plan, "value") else str(plan or PlanType.FREE.value)
+
+
+def effective_quota_limit(user: User) -> int:
+    if is_admin_user(user):
+        return 99999
+    return _PLAN_QUOTA_MAP.get(effective_plan_name(user), 50)
+
+
+def admin_access_snapshot(user: User) -> dict[str, object]:
+    is_admin = is_admin_user(user)
+    return {
+        "is_admin": is_admin,
+        "effective_plan": effective_plan_name(user),
+        "unlimited_content_quota": is_admin,
+        "unlimited_business_count": is_admin,
+        "unrestricted_provider_access": is_admin,
+        "billing_enabled": bool(settings.ENABLE_BILLING and not is_admin),
+        "show_billing_prompts": bool(settings.ENABLE_BILLING and not is_admin),
+    }
 
 
 async def get_current_user(
@@ -111,16 +137,19 @@ async def enforce_content_quota(
     if is_admin_user(current_user):
         return current_user
 
-    plan = str(getattr(current_user, "plan", "free") or "free")
+    plan = effective_plan_name(current_user)
     used = getattr(current_user, "monthly_content_used", 0) or 0
-    limit = _PLAN_QUOTA_MAP.get(plan, 50)
+    limit = effective_quota_limit(current_user)
 
     if used >= limit:
+        upgrade_message = "Contact admin to extend access."
+        if settings.ENABLE_BILLING:
+            upgrade_message = "Upgrade your plan at /pricing to generate more content."
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=(
                 f"Monthly content quota exceeded ({used}/{limit}). "
-                f"Upgrade your plan at /pricing to generate more content."
+                f"{upgrade_message}"
             ),
         )
 
