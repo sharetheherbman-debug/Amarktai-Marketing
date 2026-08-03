@@ -1,0 +1,125 @@
+version: "3.9"
+
+services:
+  # ─── AI GATEWAY (Open-Generative-AI) ───
+  oga:
+    image: ghcr.io/ruvnet/open-generative-ai:latest
+    container_name: amarktai-mkt-oga
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./config:/app/config:ro
+      - ./data/oga:/app/data
+      - ./logs/oga:/app/logs
+    environment:
+      - PORT=8080
+      - CONFIG_PATH=/app/config/providers.yaml
+      - LOG_LEVEL=info
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - amarktai-mkt-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ─── SELF-HOSTED SCRAPER (Crawlee) ───
+  scraper:
+    build:
+      context: ./scraper
+      dockerfile: Dockerfile
+    container_name: amarktai-mkt-scraper
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8081:3000"
+    volumes:
+      - ./data/scraper:/app/storage
+      - ./logs/scraper:/app/logs
+    environment:
+      - NODE_ENV=production
+      - LOG_LEVEL=info
+    networks:
+      - amarktai-mkt-net
+    mem_limit: 512m
+    cpus: 1.0
+
+  # ─── REFLEX DASHBOARD ───
+  dashboard:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: amarktai-mkt-dashboard
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8082:3000"
+    volumes:
+      - ./assets:/app/assets:ro
+      - ./logs/dashboard:/app/logs
+    environment:
+      - OGA_API_URL=http://oga:8080
+      - SCRAPER_API_URL=http://scraper:3000
+      - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=postgresql://amarktai:amarktai_secure_pass@postgres:5432/amarktai_mkt
+    depends_on:
+      oga:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - amarktai-mkt-net
+
+  # ─── REDIS (Agent Message Broker) ───
+  redis:
+    image: redis:7-alpine
+    container_name: amarktai-mkt-redis
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6380:6379"
+    volumes:
+      - amarktai-mkt-redis-data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    networks:
+      - amarktai-mkt-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ─── POSTGRESQL (App Database) ───
+  postgres:
+    image: postgres:16-alpine
+    container_name: amarktai-mkt-postgres
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - amarktai-mkt-pg-data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: amarktai_mkt
+      POSTGRES_USER: amarktai
+      POSTGRES_PASSWORD: amarktai_secure_pass
+    networks:
+      - amarktai-mkt-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U amarktai -d amarktai_mkt"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  amarktai-mkt-net:
+    driver: bridge
+    name: amarktai-mkt-network
+
+volumes:
+  amarktai-mkt-redis-data:
+    name: amarktai-mkt-redis-data
+  amarktai-mkt-pg-data:
+    name: amarktai-mkt-pg-data
