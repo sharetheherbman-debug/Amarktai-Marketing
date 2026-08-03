@@ -1,9 +1,38 @@
 # ═══════════════════════════════════════════
-# AMarkTAI Marketing Platform - GenX-Centric Stack
-# 11 services, no GPU required, all localhost-bound
+# AMarkTAI Marketing Platform - OGA White-Label Stack
+# 11 services, GenX Router API backend, no GPU required
 # ═══════════════════════════════════════════
 
 services:
+  # ─── OPEN-GENERATIVE-AI (White-Labeled Dashboard) ───
+  oga:
+    image: ghcr.io/ruvnet/open-generative-ai:latest
+    container_name: amarktai-mkt-oga
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./oga-config:/app/config:ro
+      - ./assets:/app/public/assets:ro
+      - ./data/oga:/app/data
+      - ./logs/oga:/app/logs
+    environment:
+      - PORT=8080
+      - CONFIG_PATH=/app/config/config.yaml
+      - GENX_API_KEY=${GENX_API_KEY}
+      - LOG_LEVEL=info
+      - APP_NAME=AMarkTAI Studio
+      - DEFAULT_THEME=dark
+      - PRIMARY_COLOR=#3b82f6
+      - HIDE_PROVIDER_NAMES=true
+    networks:
+      - amarktai-mkt-net
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
   # ─── SELF-HOSTED SCRAPER (Crawlee) ───
   scraper:
     build:
@@ -29,36 +58,6 @@ services:
       timeout: 10s
       retries: 3
 
-  # ─── REFLEX DASHBOARD ───
-  dashboard:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: amarktai-mkt-dashboard
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:8082:3000"
-    volumes:
-      - ./assets:/app/assets:ro
-      - ./logs/dashboard:/app/logs
-    environment:
-      - GENX_API_URL=https://query.genx.sh
-      - SCRAPER_API_URL=http://scraper:3000
-      - AUTH_API_URL=http://auth:8085
-      - POSTIZ_API_URL=http://postiz:3000
-      - DIRECTUS_API_URL=http://directus:8055
-      - MONGODB_URL=mongodb://amarktai:amarktai_db_pass@mongodb:27017/amarktai_mkt
-      - REDIS_URL=redis://redis:6379
-    depends_on:
-      mongodb:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      auth:
-        condition: service_started
-    networks:
-      - amarktai-mkt-net
-
   # ─── JWT AUTH SERVICE ───
   auth:
     build:
@@ -73,6 +72,9 @@ services:
       - JWT_SECRET=${JWT_SECRET:-amarktai_jwt_secret_change_in_production}
       - JWT_EXPIRE_MINUTES=1440
       - REDIS_URL=redis://redis:6379
+      - ADMIN_EMAIL=amarktainetwork@gmail.com
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-Ashmor12@}
+      - ADMIN_TIER=agency
     depends_on:
       mongodb:
         condition: service_healthy
@@ -102,7 +104,7 @@ services:
     networks:
       - amarktai-mkt-net
 
-  # ─── POSTIZ DATABASE (PostgreSQL - Postiz requires PG) ───
+  # ─── POSTIZ DATABASE ───
   postgres-postiz:
     image: postgres:16-alpine
     container_name: amarktai-mkt-postiz-db
@@ -183,7 +185,7 @@ services:
       timeout: 5s
       retries: 5
 
-  # ─── REDIS (Session Cache + Message Broker) ───
+  # ─── REDIS ───
   redis:
     image: redis:7-alpine
     container_name: amarktai-mkt-redis
@@ -201,7 +203,7 @@ services:
       timeout: 5s
       retries: 3
 
-  # ─── SCHEDULER (Autonomous Daily Triggers) ───
+  # ─── SCHEDULER ───
   scheduler:
     build:
       context: ./scheduler

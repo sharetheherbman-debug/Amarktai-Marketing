@@ -1,0 +1,57 @@
+# ═══════════════════════════════════════════
+# Open-Generative-AI - AMarkTAI White-Label Config
+# GenX Router API as sole backend
+# ═══════════════════════════════════════════
+
+app:
+  name: "AMarkTAI Studio"
+  logo_url: "/assets/amarktai-logo.svg"
+  favicon: "/assets/amarktai-favicon.ico"
+  primary_color: "#3b82f6"
+  domain: "marketing.amarktai.co.za"
+  hide_provider_names: true
+  default_theme: "dark"
+
+providers:
+  genx:
+    type: openai-compatible
+    base_url: "https://query.genx.sh/v1"
+    api_key: "${GENX_API_KEY}"
+    models:
+      # Text models (streaming)
+      - id: gpt-5.4
+        alias: "Premium Text"
+      - id: claude-sonnet-5
+        alias: "Creative Writer"
+      - id: gpt-5.4-mini
+        alias: "Standard Text"
+      - id: gemini-3-flash
+        alias: "Fast Multimodal"
+      - id: gpt-5-nano
+        alias: "Quick Draft"
+      - id: gemini-3.1-flash-lite
+        alias: "Economy Text"
+      - id: grok-4.3
+        alias: "Fast Reasoning"
+      # Image models (via chat completions with image output)
+      - id: grok-imagine
+        alias: "Creative Images"
+      - id: recraft-v4.1
+        alias: "Pro Design"
+      - id: genxlm-pro-v1-img-fast
+        alias: "Quick Images"
+
+server:
+  port: 8080
+  expose_models_as:
+    - "Premium Text"
+    - "Creative Writer"
+    - "Standard Text"
+    - "Fast Multimodal"
+    - "Quick Draft"
+    - "Economy Text"
+    - "Fast Reasoning"
+    - "Creative Images"
+    - "Pro Design"
+    - "Quick Images"
+  rate_limit_per_minute: 200
