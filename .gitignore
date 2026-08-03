@@ -1,0 +1,24 @@
+# Secrets - NEVER commit
+.env
+*.key
+*.pem
+config/providers.yaml
+
+# Data & Logs
+data/*
+logs/*
+!data/.gitkeep
+!logs/.gitkeep
+
+# Node/Python artifacts
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+
+# Docker runtime
+docker-compose.override.yml
+
+# OS files
+.DS_Store
+Thumbs.db
