@@ -1,32 +1,9 @@
-version: "3.9"
+# ═══════════════════════════════════════════
+# AMarkTAI Marketing Platform - GenX-Centric Stack
+# 11 services, no GPU required, all localhost-bound
+# ═══════════════════════════════════════════
 
 services:
-  # ─── AI GATEWAY (Open-Generative-AI) ───
-  oga:
-    image: ghcr.io/ruvnet/open-generative-ai:latest
-    container_name: amarktai-mkt-oga
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:8080:8080"
-    volumes:
-      - ./config:/app/config:ro
-      - ./data/oga:/app/data
-      - ./logs/oga:/app/logs
-    environment:
-      - PORT=8080
-      - CONFIG_PATH=/app/config/providers.yaml
-      - LOG_LEVEL=info
-    depends_on:
-      redis:
-        condition: service_healthy
-    networks:
-      - amarktai-mkt-net
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
   # ─── SELF-HOSTED SCRAPER (Crawlee) ───
   scraper:
     build:
@@ -46,6 +23,11 @@ services:
       - amarktai-mkt-net
     mem_limit: 512m
     cpus: 1.0
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   # ─── REFLEX DASHBOARD ───
   dashboard:
@@ -60,21 +42,148 @@ services:
       - ./assets:/app/assets:ro
       - ./logs/dashboard:/app/logs
     environment:
-      - OGA_API_URL=http://oga:8080
+      - GENX_API_URL=https://query.genx.sh
       - SCRAPER_API_URL=http://scraper:3000
+      - AUTH_API_URL=http://auth:8085
+      - POSTIZ_API_URL=http://postiz:3000
+      - DIRECTUS_API_URL=http://directus:8055
+      - MONGODB_URL=mongodb://amarktai:amarktai_db_pass@mongodb:27017/amarktai_mkt
       - REDIS_URL=redis://redis:6379
-      - DATABASE_URL=postgresql://amarktai:amarktai_secure_pass@postgres:5432/amarktai_mkt
     depends_on:
-      oga:
+      mongodb:
         condition: service_healthy
-      postgres:
+      redis:
+        condition: service_healthy
+      auth:
+        condition: service_started
+    networks:
+      - amarktai-mkt-net
+
+  # ─── JWT AUTH SERVICE ───
+  auth:
+    build:
+      context: ./auth
+      dockerfile: Dockerfile
+    container_name: amarktai-mkt-auth
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8085:8085"
+    environment:
+      - MONGODB_URL=mongodb://amarktai:amarktai_db_pass@mongodb:27017/amarktai_mkt
+      - JWT_SECRET=${JWT_SECRET:-amarktai_jwt_secret_change_in_production}
+      - JWT_EXPIRE_MINUTES=1440
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      mongodb:
         condition: service_healthy
       redis:
         condition: service_healthy
     networks:
       - amarktai-mkt-net
 
-  # ─── REDIS (Agent Message Broker) ───
+  # ─── POSTIZ (Social Media Posting) ───
+  postiz:
+    image: ghcr.io/gitroomhq/postiz-app:latest
+    container_name: amarktai-mkt-postiz
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8086:3000"
+    environment:
+      - DATABASE_URL=postgresql://postiz:postiz_pass@postgres-postiz:5432/postiz
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=${JWT_SECRET:-amarktai_jwt_secret_change_in_production}
+      - FRONTEND_URL=https://marketing.amarktai.co.za
+      - BACKEND_URL=http://localhost:8086
+    depends_on:
+      postgres-postiz:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - amarktai-mkt-net
+
+  # ─── POSTIZ DATABASE (PostgreSQL - Postiz requires PG) ───
+  postgres-postiz:
+    image: postgres:16-alpine
+    container_name: amarktai-mkt-postiz-db
+    restart: unless-stopped
+    volumes:
+      - amarktai-mkt-postiz-pg:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: postiz
+      POSTGRES_USER: postiz
+      POSTGRES_PASSWORD: postiz_pass
+    networks:
+      - amarktai-mkt-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postiz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── DIRECTUS (Content Approval) ───
+  directus:
+    image: directus/directus:latest
+    container_name: amarktai-mkt-directus
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8087:8055"
+    volumes:
+      - amarktai-mkt-directus-uploads:/directus/uploads
+      - amarktai-mkt-directus-extensions:/directus/extensions
+    environment:
+      KEY: ${DIRECTUS_KEY:-amarktai-directus-key-change-me}
+      SECRET: ${DIRECTUS_SECRET:-amarktai-directus-secret-change-me}
+      ADMIN_EMAIL: admin@amarktai.co.za
+      ADMIN_PASSWORD: ${DIRECTUS_ADMIN_PASS:-AdminPass2026!}
+      DB_CLIENT: sqlite3
+      DB_FILENAME: /directus/database/data.db
+      CACHE_ENABLED: "true"
+      CACHE_STORE: redis
+      REDIS: redis://redis:6379
+      PUBLIC_URL: https://marketing.amarktai.co.za/directus
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - amarktai-mkt-net
+
+  # ─── PHOENIX (LLM Tracing + Analytics) ───
+  phoenix:
+    image: arizephoenix/phoenix:latest
+    container_name: amarktai-mkt-phoenix
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8089:6006"
+    volumes:
+      - amarktai-mkt-phoenix-data:/phoenix/data
+    environment:
+      - PHOENIX_PORT=6006
+    networks:
+      - amarktai-mkt-net
+
+  # ─── MONGODB (Primary Database) ───
+  mongodb:
+    image: mongo:7-jammy
+    container_name: amarktai-mkt-mongodb
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:27017:27017"
+    volumes:
+      - amarktai-mkt-mongo-data:/data/db
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: amarktai
+      MONGO_INITDB_ROOT_PASSWORD: amarktai_db_pass
+      MONGO_INITDB_DATABASE: amarktai_mkt
+    networks:
+      - amarktai-mkt-net
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── REDIS (Session Cache + Message Broker) ───
   redis:
     image: redis:7-alpine
     container_name: amarktai-mkt-redis
@@ -92,26 +201,28 @@ services:
       timeout: 5s
       retries: 3
 
-  # ─── POSTGRESQL (App Database) ───
-  postgres:
-    image: postgres:16-alpine
-    container_name: amarktai-mkt-postgres
+  # ─── SCHEDULER (Autonomous Daily Triggers) ───
+  scheduler:
+    build:
+      context: ./scheduler
+      dockerfile: Dockerfile
+    container_name: amarktai-mkt-scheduler
     restart: unless-stopped
-    ports:
-      - "127.0.0.1:5433:5432"
-    volumes:
-      - amarktai-mkt-pg-data:/var/lib/postgresql/data
     environment:
-      POSTGRES_DB: amarktai_mkt
-      POSTGRES_USER: amarktai
-      POSTGRES_PASSWORD: amarktai_secure_pass
+      - GENX_API_KEY=${GENX_API_KEY}
+      - MONGODB_URL=mongodb://amarktai:amarktai_db_pass@mongodb:27017/amarktai_mkt
+      - SCRAPER_API_URL=http://scraper:3000
+      - AUTH_API_URL=http://auth:8085
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      scraper:
+        condition: service_healthy
     networks:
       - amarktai-mkt-net
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U amarktai -d amarktai_mkt"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
 
 networks:
   amarktai-mkt-net:
@@ -119,7 +230,15 @@ networks:
     name: amarktai-mkt-network
 
 volumes:
+  amarktai-mkt-mongo-data:
+    name: amarktai-mkt-mongo-data
   amarktai-mkt-redis-data:
     name: amarktai-mkt-redis-data
-  amarktai-mkt-pg-data:
-    name: amarktai-mkt-pg-data
+  amarktai-mkt-postiz-pg:
+    name: amarktai-mkt-postiz-pg
+  amarktai-mkt-directus-uploads:
+    name: amarktai-mkt-directus-uploads
+  amarktai-mkt-directus-extensions:
+    name: amarktai-mkt-directus-extensions
+  amarktai-mkt-phoenix-data:
+    name: amarktai-mkt-phoenix-data
